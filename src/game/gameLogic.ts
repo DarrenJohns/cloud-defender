@@ -16,12 +16,38 @@ export interface Projectile {
   y: number;
 }
 
+export interface DamageHole {
+  x: number;
+  y: number;
+  radius: number;
+  seed: number;
+}
+
+export interface Shield {
+  id: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  damageHoles: DamageHole[];
+  destroyed: boolean;
+}
+
+export interface ShieldHit {
+  shieldId: number;
+  x: number;
+  y: number;
+  seed: number;
+}
+
 export type GameMode = "playing" | "won" | "gameover";
 
 export interface GameState {
   mode: GameMode;
   shipX: number;
   enemies: Enemy[];
+  shields: Shield[];
+  shieldHits: ShieldHit[];
   playerShots: Projectile[];
   enemyShots: Projectile[];
   score: number;
@@ -32,6 +58,7 @@ export interface GameState {
   enemyFireCooldown: number;
   invulnerability: number;
   nextProjectileId: number;
+  damageRandomState: number;
 }
 
 export interface GameInput {
@@ -51,6 +78,14 @@ const ENEMY_BOTTOM = -5.1;
 const PLAYER_SPEED = 8;
 const PLAYER_SHOT_SPEED = 13;
 const ENEMY_SHOT_SPEED = 5.5;
+export const SHIELD_WIDTH = 2.18;
+export const SHIELD_HEIGHT = 1.02;
+export const SHIELD_Y = -3.25;
+const SHIELD_POSITIONS = [-5.7, -1.9, 1.9, 5.7];
+const MAX_DAMAGE_HOLES = 64;
+const SHIELD_COVERAGE_COLUMNS = 32;
+const SHIELD_COVERAGE_ROWS = 16;
+const SHIELD_DESTROYED_COVERAGE = 0.86;
 
 function createEnemies(): Enemy[] {
   return Array.from({ length: ENEMY_ROWS * ENEMY_COLUMNS }, (_, index) => {
@@ -67,11 +102,25 @@ function createEnemies(): Enemy[] {
   });
 }
 
-export function createGameState(): GameState {
+function createShields(): Shield[] {
+  return SHIELD_POSITIONS.map((x, id) => ({
+    id,
+    x,
+    y: SHIELD_Y,
+    width: SHIELD_WIDTH,
+    height: SHIELD_HEIGHT,
+    damageHoles: [],
+    destroyed: false,
+  }));
+}
+
+export function createGameState(seed = Math.floor(Math.random() * 0xffffffff)): GameState {
   return {
     mode: "playing",
     shipX: 0,
     enemies: createEnemies(),
+    shields: createShields(),
+    shieldHits: [],
     playerShots: [],
     enemyShots: [],
     score: 0,
@@ -82,7 +131,89 @@ export function createGameState(): GameState {
     enemyFireCooldown: 1.1,
     invulnerability: 0,
     nextProjectileId: 0,
+    damageRandomState: seed >>> 0 || 1,
   };
+}
+
+function nextDamageRandom(state: GameState): number {
+  let value = state.damageRandomState;
+  value ^= value << 13;
+  value ^= value >>> 17;
+  value ^= value << 5;
+  state.damageRandomState = value >>> 0 || 1;
+  return state.damageRandomState / 0x1_0000_0000;
+}
+
+export function isShieldDamagedAt(shield: Shield, x: number, y: number): boolean {
+  if (shield.destroyed) return true;
+  const localX = x - shield.x;
+  const localY = y - shield.y;
+  return shield.damageHoles.some((hole) => {
+    const offsetX = localX - hole.x;
+    const offsetY = localY - hole.y;
+    const angle = Math.atan2(offsetY, offsetX);
+    const edge =
+      hole.radius *
+      (0.8 +
+        0.14 * Math.sin(angle * 2 + hole.seed) +
+        0.08 * Math.sin(angle * 4 - hole.seed * 1.31) +
+        0.025 * Math.sin(angle * 7 + hole.seed * 2.1));
+    return Math.hypot(offsetX, offsetY) < edge;
+  });
+}
+
+function updateShieldDestruction(shield: Shield): void {
+  let damagedCells = 0;
+  const totalCells = SHIELD_COVERAGE_COLUMNS * SHIELD_COVERAGE_ROWS;
+  for (let row = 0; row < SHIELD_COVERAGE_ROWS; row += 1) {
+    const y = shield.y - shield.height / 2 + ((row + 0.5) / SHIELD_COVERAGE_ROWS) * shield.height;
+    for (let column = 0; column < SHIELD_COVERAGE_COLUMNS; column += 1) {
+      const x =
+        shield.x - shield.width / 2 + ((column + 0.5) / SHIELD_COVERAGE_COLUMNS) * shield.width;
+      if (isShieldDamagedAt(shield, x, y)) damagedCells += 1;
+    }
+  }
+  shield.destroyed = damagedCells / totalCells >= SHIELD_DESTROYED_COVERAGE;
+}
+
+export function damageShieldAt(
+  state: GameState,
+  shield: Shield,
+  x: number,
+  y: number,
+): boolean {
+  if (shield.destroyed) return false;
+  if (
+    x < shield.x - shield.width / 2 ||
+    x > shield.x + shield.width / 2 ||
+    y < shield.y - shield.height / 2 ||
+    y > shield.y + shield.height / 2 ||
+    isShieldDamagedAt(shield, x, y)
+  ) {
+    return false;
+  }
+
+  const addHole = (holeX: number, holeY: number, radius: number): void => {
+    if (shield.damageHoles.length >= MAX_DAMAGE_HOLES) return;
+    shield.damageHoles.push({
+      x: holeX,
+      y: holeY,
+      radius,
+      seed: nextDamageRandom(state) * 1000,
+    });
+  };
+
+  const centerX = x - shield.x;
+  const centerY = y - shield.y;
+  addHole(centerX, centerY, 0.52 + nextDamageRandom(state) * 0.12);
+  updateShieldDestruction(shield);
+  state.shieldHits.push({
+    shieldId: shield.id,
+    x,
+    y,
+    seed: nextDamageRandom(state) * 0xffffffff,
+  });
+  return true;
 }
 
 function resetEnemyFormation(state: GameState): void {
@@ -138,12 +269,55 @@ export function updateGame(
   state.enemyFireCooldown -= delta;
   state.invulnerability = Math.max(0, state.invulnerability - delta);
 
+  const previousPlayerY = new Map(state.playerShots.map((shot) => [shot.id, shot.y]));
+  const previousEnemyY = new Map(state.enemyShots.map((shot) => [shot.id, shot.y]));
+
   if (input.fire && state.playerFireCooldown === 0) {
     spawnPlayerShot(state);
+    const newShot = state.playerShots[state.playerShots.length - 1]!;
+    previousPlayerY.set(newShot.id, newShot.y);
   }
 
   for (const shot of state.playerShots) shot.y += PLAYER_SHOT_SPEED * delta;
   for (const shot of state.enemyShots) shot.y -= ENEMY_SHOT_SPEED * delta;
+
+  const absorbShotsAtShields = (
+    shots: Projectile[],
+    previousY: Map<number, number>,
+    direction: 1 | -1,
+  ): Projectile[] =>
+    shots.filter((shot) => {
+      const startY = previousY.get(shot.id) ?? shot.y;
+      const lowY = Math.min(startY, shot.y);
+      const highY = Math.max(startY, shot.y);
+      for (const shield of state.shields) {
+        const shieldLowY = shield.y - shield.height / 2;
+        const shieldHighY = shield.y + shield.height / 2;
+        const crossesShield =
+          shot.x >= shield.x - shield.width / 2 &&
+          shot.x <= shield.x + shield.width / 2 &&
+          highY >= shieldLowY &&
+          lowY <= shieldHighY;
+        if (!crossesShield) continue;
+
+        const impactStart = Math.max(lowY, shieldLowY);
+        const impactEnd = Math.min(highY, shieldHighY);
+        const steps = Math.max(1, Math.ceil((impactEnd - impactStart) / 0.025));
+        for (let step = 0; step <= steps; step += 1) {
+          const progress = step / steps;
+          const impactY =
+            direction === 1
+              ? impactStart + (impactEnd - impactStart) * progress
+              : impactEnd - (impactEnd - impactStart) * progress;
+          if (isShieldDamagedAt(shield, shot.x, impactY)) continue;
+          if (damageShieldAt(state, shield, shot.x, impactY)) return false;
+        }
+      }
+      return true;
+    });
+
+  state.playerShots = absorbShotsAtShields(state.playerShots, previousPlayerY, 1);
+  state.enemyShots = absorbShotsAtShields(state.enemyShots, previousEnemyY, -1);
 
   if (state.enemies.length > 0) {
     const nextEdge = state.enemies.reduce(

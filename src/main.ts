@@ -20,6 +20,8 @@ const restartButton = requiredElement<HTMLButtonElement>("restart-button");
 const gameScene = new GameScene(container);
 let state = createGameState();
 let shipReady = false;
+let shieldsReady = false;
+let cloudsReady = false;
 const keys = new Set<string>();
 const input: GameInput = { left: false, right: false, fire: false };
 
@@ -40,6 +42,12 @@ function updateHud(): void {
   scoreElement.textContent = String(state.score).padStart(5, "0");
   livesElement.textContent = String(state.lives);
   showMode(state.mode);
+}
+
+function onAssetsReady(): void {
+  if (!shipReady || !shieldsReady || !cloudsReady) return;
+  assetNotice.hidden = true;
+  updateHud();
 }
 
 window.addEventListener("keydown", (event) => {
@@ -69,8 +77,27 @@ restartButton.addEventListener("click", restart);
 gameScene.loadShip(
   () => {
     shipReady = true;
-    assetNotice.hidden = true;
-    updateHud();
+    onAssetsReady();
+  },
+  (message) => {
+    assetErrorMessage.textContent = message;
+    assetNotice.hidden = false;
+  },
+);
+gameScene.loadShields(
+  () => {
+    shieldsReady = true;
+    onAssetsReady();
+  },
+  (message) => {
+    assetErrorMessage.textContent = message;
+    assetNotice.hidden = false;
+  },
+);
+gameScene.loadClouds(
+  () => {
+    cloudsReady = true;
+    onAssetsReady();
   },
   (message) => {
     assetErrorMessage.textContent = message;
@@ -84,7 +111,7 @@ function animate(now: number): void {
   const deltaSeconds = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
 
-  if (shipReady && state.mode === "playing") {
+  if (shipReady && shieldsReady && cloudsReady && state.mode === "playing") {
     updateGame(state, input, deltaSeconds);
     updateHud();
   }
