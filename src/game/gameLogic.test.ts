@@ -22,18 +22,56 @@ describe("game simulation", () => {
     expect(state.shipX).toBe(PLAYER_LIMIT);
   });
 
-  it("fires, removes a hit enemy, and awards score", () => {
+  it("fires, scores a hit, and starts the next alien wave", () => {
     const state = createGameState();
     state.shipX = state.enemies[0]!.x;
     state.enemies = [{ ...state.enemies[0]!, x: state.shipX, y: PLAYER_Y + 1.1 }];
     state.enemyFireCooldown = 10;
 
     updateGame(state, { ...idle, fire: true }, 0.05);
-    updateGame(state, { ...idle, fire: true }, 0.05);
 
     expect(state.score).toBe(10);
-    expect(state.enemies).toHaveLength(0);
-    expect(state.mode).toBe("won");
+    expect(state.level).toBe(2);
+    expect(state.enemies).toHaveLength(18);
+    expect(state.enemies.slice(0, 6).every((enemy) => enemy.modelIndex === 3)).toBe(true);
+    expect(state.enemies.slice(6, 12).every((enemy) => enemy.modelIndex === 4)).toBe(true);
+    expect(state.enemies.slice(12).every((enemy) => enemy.modelIndex === 5)).toBe(true);
+    expect(state.enemySpeed).toBeGreaterThan(1.15);
+    expect(state.mode).toBe("playing");
+  });
+
+  it("cycles every alien model through the waves and preserves shield damage", () => {
+    const state = createGameState(123);
+    const shield = state.shields[0]!;
+    expect(damageShieldAt(state, shield, shield.x, shield.y)).toBe(true);
+    const damagedHoleCount = shield.damageHoles.length;
+    const modelIndices = new Set<number>();
+
+    for (let level = 1; level <= 4; level += 1) {
+      for (const enemy of state.enemies) modelIndices.add(enemy.modelIndex);
+      if (level < 4) {
+        state.enemies = [];
+        updateGame(state, idle, 0.016);
+      }
+    }
+
+    expect(state.level).toBe(4);
+    expect(modelIndices.size).toBe(10);
+    expect(shield.damageHoles).toHaveLength(damagedHoleCount);
+    expect(state.enemySpeed).toBeGreaterThan(1.15);
+  });
+
+  it("increases enemy firing rate on later waves", () => {
+    const firstWave = createGameState();
+    const laterWave = createGameState();
+    laterWave.level = 4;
+    firstWave.enemyFireCooldown = 0;
+    laterWave.enemyFireCooldown = 0;
+
+    updateGame(firstWave, idle, 0.01, () => 0);
+    updateGame(laterWave, idle, 0.01, () => 0);
+
+    expect(laterWave.enemyFireCooldown).toBeLessThan(firstWave.enemyFireCooldown);
   });
 
   it("loses one shield when an enemy shot hits the ship", () => {
@@ -161,6 +199,7 @@ describe("game simulation", () => {
 
     const restarted = createGameState(456);
 
+    expect(restarted.level).toBe(1);
     expect(restarted.shields.every((shield) => shield.damageHoles.length === 0)).toBe(true);
     expect(restarted.damageRandomState).not.toBe(state.damageRandomState);
   });

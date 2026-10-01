@@ -3,7 +3,6 @@ import {
   AdditiveBlending,
   BufferGeometry,
   Box3,
-  BoxGeometry,
   CanvasTexture,
   Color,
   DirectionalLight,
@@ -33,12 +32,15 @@ import {
 } from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import type { DamageHole, GameState, Projectile, ShieldHit } from "./gameLogic";
-import { PLAYER_Y, SHIELD_HEIGHT, SHIELD_WIDTH, SHIELD_Y, WORLD_WIDTH } from "./gameLogic";
+import { ALIEN_VARIANT_COUNT, PLAYER_Y, SHIELD_HEIGHT, SHIELD_WIDTH, SHIELD_Y, WORLD_WIDTH } from "./gameLogic";
 
 const HALF_WIDTH = WORLD_WIDTH / 2;
-const ENEMY_COLORS = ["#71d7ff", "#b6a5ff", "#6ff0d0"];
 const DAMAGE_HOLE_CAPACITY = 64;
 const SHIELD_CHUNK_COLORS = ["#e13d48", "#fa606a", "#9e202d"];
+const ALIEN_MODEL_PATHS = Array.from(
+  { length: ALIEN_VARIANT_COUNT },
+  (_, index) => `/assets/alien${index + 1}.glb`,
+);
 
 interface CloudMotion {
   x: number;
@@ -358,39 +360,13 @@ function makeShipShadow(): Mesh {
   return shadow;
 }
 
-function makeEnemy(index: number): Group {
+function makeEnemy(model: Group): Group {
   const enemy = new Group();
-  const color = new Color(ENEMY_COLORS[index % ENEMY_COLORS.length]!);
-  const bodyMaterial = new MeshStandardMaterial({
-    color,
-    roughness: 0.34,
-    metalness: 0.14,
-    emissive: color,
-    emissiveIntensity: 0.16,
-  });
-  const darkMaterial = new MeshStandardMaterial({
-    color: "#18253e",
-    roughness: 0.4,
-    metalness: 0.2,
-  });
-  const body = new Mesh(new SphereGeometry(0.38, 20, 14), bodyMaterial);
-  body.scale.set(1.22, 0.75, 0.68);
-  enemy.add(body);
-
-  const wingGeometry = new BoxGeometry(0.35, 0.13, 0.28);
-  for (const side of [-1, 1]) {
-    const wing = new Mesh(wingGeometry, bodyMaterial);
-    wing.position.set(side * 0.48, -0.08, 0);
-    wing.rotation.z = side * -0.18;
-    enemy.add(wing);
-  }
-
-  const eye = new Mesh(new SphereGeometry(0.09, 12, 8), darkMaterial);
-  eye.position.set(0, 0.06, 0.27);
-  enemy.add(eye);
-  enemy.traverse((object) => {
+  const alien = model.clone(true);
+  alien.traverse((object) => {
     if (object instanceof Mesh) object.castShadow = true;
   });
+  enemy.add(alien);
   return enemy;
 }
 
@@ -417,6 +393,7 @@ export class GameScene {
   private readonly clouds: Group[] = [];
   private readonly cloudMotion: CloudMotion[] = [];
   private readonly cloudHazeTexture: CanvasTexture;
+  private readonly alienModels: Group[] = [];
   private readonly accentLight = new PointLight("#54bfff", 12, 18, 2);
   private readonly shadow: Mesh;
   private readonly playerRoot = new Group();
@@ -509,6 +486,41 @@ export class GameScene {
       undefined,
       () => onError("Could not load public/assets/azure.glb. Add the Azure ship model and reload."),
     );
+  }
+
+  loadAliens(onReady: () => void, onError: (message: string) => void): void {
+    Promise.all(
+      ALIEN_MODEL_PATHS.map(async (path) => {
+        let model: Group;
+        try {
+          model = (await this.loader.loadAsync(path)).scene;
+        } catch {
+          throw new Error(`Could not load public${path}.`);
+        }
+
+        model.updateMatrixWorld(true);
+        const bounds = new Box3().setFromObject(model);
+        const size = bounds.getSize(new Vector3());
+        if (size.x <= 0 || size.y <= 0) {
+          throw new Error(`The model at public${path} has invalid dimensions.`);
+        }
+
+        const center = bounds.getCenter(new Vector3());
+        const scale = 0.92 / Math.max(size.x, size.y);
+        const normalized = new Group();
+        normalized.add(model);
+        normalized.scale.setScalar(scale);
+        normalized.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
+        return normalized;
+      }),
+    )
+      .then((models) => {
+        this.alienModels.push(...models);
+        onReady();
+      })
+      .catch((error: unknown) => {
+        onError(error instanceof Error ? error.message : "Could not load the alien models.");
+      });
   }
 
   loadShields(onReady: () => void, onError: (message: string) => void): void {
@@ -745,22 +757,33 @@ export class GameScene {
       }
     }
 
-    const currentEnemyIds = new Set(state.enemies.map((enemy) => enemy.id));
-    for (const [id, view] of this.enemyViews) {
-      if (!currentEnemyIds.has(id)) {
-        this.scene.remove(view);
-        this.enemyViews.delete(id);
+    if (this.alienModels.length === ALIEN_VARIANT_COUNT) {
+      const currentEnemyIds = new Set(state.enemies.map((enemy) => enemy.id));
+      for (const [id, view] of this.enemyViews) {
+        if (!currentEnemyIds.has(id)) {
+          this.scene.remove(view);
+          this.enemyViews.delete(id);
+        }
       }
-    }
-    for (const enemy of state.enemies) {
-      let view = this.enemyViews.get(enemy.id);
-      if (!view) {
-        view = makeEnemy(enemy.row);
-        this.enemyViews.set(enemy.id, view);
-        this.scene.add(view);
+      for (const enemy of state.enemies) {
+        let view = this.enemyViews.get(enemy.id);
+        if (!view) {
+          const alienModel = this.alienModels[enemy.modelIndex];
+          if (!alienModel) throw new Error(`Alien model ${enemy.modelIndex + 1} is not loaded.`);
+          view = makeEnemy(alienModel);
+          this.enemyViews.set(enemy.id, view);
+          this.scene.add(view);
+        }
+        const phase = enemy.id * 0.83 + enemy.column * 1.37;
+        view.position.set(
+          enemy.x,
+          enemy.y + Math.sin(elapsedSeconds * 2 + phase) * 0.045,
+          Math.cos(elapsedSeconds * 1.4 + phase) * 0.055,
+        );
+        view.rotation.x = Math.sin(elapsedSeconds * 1.4 + phase) * 0.045;
+        view.rotation.y = Math.cos(elapsedSeconds * 1.1 + phase) * 0.075;
+        view.rotation.z = Math.sin(elapsedSeconds * 1.7 + phase) * 0.035;
       }
-      view.position.set(enemy.x, enemy.y, 0);
-      view.rotation.z = Math.sin(elapsedSeconds * 3 + enemy.column) * 0.055;
     }
 
     this.syncProjectiles(state.playerShots, this.playerShotViews, false);

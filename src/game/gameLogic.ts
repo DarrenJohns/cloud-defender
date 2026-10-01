@@ -1,11 +1,13 @@
 export const WORLD_WIDTH = 16;
 export const PLAYER_Y = -5.7;
 export const PLAYER_LIMIT = 7.25;
+export const ALIEN_VARIANT_COUNT = 10;
 
 export interface Enemy {
   id: number;
   row: number;
   column: number;
+  modelIndex: number;
   x: number;
   y: number;
 }
@@ -40,10 +42,11 @@ export interface ShieldHit {
   seed: number;
 }
 
-export type GameMode = "playing" | "won" | "gameover";
+export type GameMode = "playing" | "gameover";
 
 export interface GameState {
   mode: GameMode;
+  level: number;
   shipX: number;
   enemies: Enemy[];
   shields: Shield[];
@@ -87,15 +90,16 @@ const SHIELD_COVERAGE_COLUMNS = 32;
 const SHIELD_COVERAGE_ROWS = 16;
 const SHIELD_DESTROYED_COVERAGE = 0.86;
 
-function createEnemies(): Enemy[] {
+function createEnemies(level: number): Enemy[] {
   return Array.from({ length: ENEMY_ROWS * ENEMY_COLUMNS }, (_, index) => {
     const row = Math.floor(index / ENEMY_COLUMNS);
     const column = index % ENEMY_COLUMNS;
 
     return {
-      id: index,
+      id: (level - 1) * ENEMY_ROWS * ENEMY_COLUMNS + index,
       row,
       column,
+      modelIndex: ((level - 1) * ENEMY_ROWS + row) % ALIEN_VARIANT_COUNT,
       x: ENEMY_START_X + column * ENEMY_SPACING_X,
       y: ENEMY_START_Y - row * ENEMY_SPACING_Y,
     };
@@ -115,10 +119,12 @@ function createShields(): Shield[] {
 }
 
 export function createGameState(seed = Math.floor(Math.random() * 0xffffffff)): GameState {
+  const level = 1;
   return {
     mode: "playing",
+    level,
     shipX: 0,
-    enemies: createEnemies(),
+    enemies: createEnemies(level),
     shields: createShields(),
     shieldHits: [],
     playerShots: [],
@@ -217,7 +223,7 @@ export function damageShieldAt(
 }
 
 function resetEnemyFormation(state: GameState): void {
-  state.enemies = createEnemies();
+  state.enemies = createEnemies(state.level);
   state.enemyDirection = 1;
   state.playerShots = [];
   state.enemyShots = [];
@@ -248,7 +254,8 @@ function spawnEnemyShot(state: GameState, random: () => number): void {
     x: shooter.x,
     y: shooter.y - 0.45,
   });
-  state.enemyFireCooldown = 1.25 + random() * 0.65;
+  const fireRate = Math.min(2.2, 1 + (state.level - 1) * 0.12);
+  state.enemyFireCooldown = (1.25 + random() * 0.65) / fireRate;
 }
 
 export function updateGame(
@@ -356,7 +363,7 @@ export function updateGame(
   }
   if (hitEnemyIds.size > 0) {
     state.enemies = state.enemies.filter((enemy) => !hitEnemyIds.has(enemy.id));
-    state.enemySpeed += hitEnemyIds.size * 0.045;
+    state.enemySpeed = Math.min(4.5, state.enemySpeed + hitEnemyIds.size * 0.045);
   }
   state.playerShots = state.playerShots.filter(
     (shot) => !consumedPlayerShotIds.has(shot.id) && shot.y < 8,
@@ -383,8 +390,13 @@ export function updateGame(
   }
 
   if (state.enemies.length === 0) {
-    state.mode = "won";
-    return;
+    state.level += 1;
+    state.enemies = createEnemies(state.level);
+    state.enemyDirection = 1;
+    state.enemySpeed = Math.min(4.5, 1.15 * 1.14 ** (state.level - 1));
+    state.enemyFireCooldown = Math.max(0.7, 1.1 - (state.level - 1) * 0.07);
+    state.playerShots = [];
+    state.enemyShots = [];
   }
 
   if (state.enemyFireCooldown <= 0) {

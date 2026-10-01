@@ -12,6 +12,7 @@ function requiredElement<T extends HTMLElement>(id: string): T {
 const container = requiredElement<HTMLDivElement>("game");
 const assetNotice = requiredElement<HTMLElement>("asset-notice");
 const assetErrorMessage = requiredElement<HTMLSpanElement>("asset-error-message");
+const levelElement = requiredElement<HTMLElement>("level");
 const scoreElement = requiredElement<HTMLElement>("score");
 const livesElement = requiredElement<HTMLElement>("lives");
 const endPanel = requiredElement<HTMLElement>("end-panel");
@@ -20,6 +21,7 @@ const restartButton = requiredElement<HTMLButtonElement>("restart-button");
 const gameScene = new GameScene(container);
 let state = createGameState();
 let shipReady = false;
+let aliensReady = false;
 let shieldsReady = false;
 let cloudsReady = false;
 const keys = new Set<string>();
@@ -34,18 +36,18 @@ function updateInput(): void {
 function showMode(mode: GameMode): void {
   const ended = mode !== "playing";
   endPanel.hidden = !ended;
-  if (mode === "won") endTitle.textContent = "Cloud secured";
   if (mode === "gameover") endTitle.textContent = "Azure needs you";
 }
 
 function updateHud(): void {
+  levelElement.textContent = String(state.level).padStart(2, "0");
   scoreElement.textContent = String(state.score).padStart(5, "0");
   livesElement.textContent = String(state.lives);
   showMode(state.mode);
 }
 
 function onAssetsReady(): void {
-  if (!shipReady || !shieldsReady || !cloudsReady) return;
+  if (!shipReady || !aliensReady || !shieldsReady || !cloudsReady) return;
   assetNotice.hidden = true;
   updateHud();
 }
@@ -84,6 +86,16 @@ gameScene.loadShip(
     assetNotice.hidden = false;
   },
 );
+gameScene.loadAliens(
+  () => {
+    aliensReady = true;
+    onAssetsReady();
+  },
+  (message) => {
+    assetErrorMessage.textContent = message;
+    assetNotice.hidden = false;
+  },
+);
 gameScene.loadShields(
   () => {
     shieldsReady = true;
@@ -111,7 +123,7 @@ function animate(now: number): void {
   const deltaSeconds = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
 
-  if (shipReady && shieldsReady && cloudsReady && state.mode === "playing") {
+  if (shipReady && aliensReady && shieldsReady && cloudsReady && state.mode === "playing") {
     updateGame(state, input, deltaSeconds);
     updateHud();
   }
