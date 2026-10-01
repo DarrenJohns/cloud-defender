@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="theme-color"
+      content="#071326"
+    />
+    <meta
+      name="description"
+      content="A 3D Azure-themed arcade game prototype."
+    />
+    <title>Azure Invaders</title>
+  </head>
+  <body>
+    <main class="game-shell">
+      <div id="game" class="game-viewport" aria-label="Azure Invaders game">
+        <div class="hud" aria-live="polite">
+          <div class="brand">
+            <span class="brand-mark" aria-hidden="true"></span>
+            <span>AZURE <b>DEFENDER</b></span>
+          </div>
+          <div class="hud-stats">
+            <div><span class="hud-label">SCORE</span><strong id="score">00000</strong></div>
+            <div><span class="hud-label">SHIELDS</span><strong id="lives">3</strong></div>
+          </div>
+        </div>
+
+        <section id="asset-notice" class="asset-notice" role="alert" hidden>
+          <strong>Azure ship model unavailable</strong>
+          <span id="asset-error-message">Place the model in public/assets/azure.glb, then reload.</span>
+        </section>
+
+        <section id="end-panel" class="end-panel" aria-live="polite" hidden>
+          <p id="end-title" class="end-title"></p>
+          <button id="restart-button" type="button">Play again</button>
+        </section>
+
+      </div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
