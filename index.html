@@ -43,10 +43,30 @@
           </div>
         </div>
 
-        <section id="pause-panel" class="end-panel pause-panel" aria-live="polite" hidden>
-          <p class="end-title">Game paused</p>
-          <span>Press P or select Resume to continue.</span>
-          <button id="resume-button" type="button">Resume</button>
+        <div class="end-backdrop" aria-hidden="true"></div>
+        <section id="pause-panel" class="end-panel breach-panel standby-panel" aria-live="polite" hidden>
+          <div class="breach-header">
+            <span class="breach-dot" aria-hidden="true"></span>
+            <span>DEFENDER.SYS</span>
+            <span class="breach-code">HOLD 0x0000</span>
+          </div>
+          <p class="end-title breach-title">STANDBY</p>
+          <p class="breach-subtitle">Defence grid suspended · invaders frozen in place</p>
+          <dl class="breach-stats">
+            <div><dt>Score</dt><dd id="pause-score">00000</dd></div>
+            <div><dt>Wave</dt><dd id="pause-level">01</dd></div>
+            <div><dt>Shields</dt><dd id="pause-lives">3</dd></div>
+          </dl>
+          <div class="standby-actions">
+            <button id="resume-button" class="breach-button" type="button">
+              <span>Resume</span>
+              <kbd>P</kbd>
+            </button>
+            <button id="pause-restart-button" class="breach-button breach-button-secondary" type="button">
+              <span>Restart</span>
+              <kbd>R</kbd>
+            </button>
+          </div>
         </section>
 
         <section id="asset-notice" class="asset-notice" role="alert" hidden>

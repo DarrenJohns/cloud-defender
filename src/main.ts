@@ -23,6 +23,10 @@ const muteButton = requiredElement<HTMLButtonElement>("mute-button");
 const muteButtonLabel = requiredElement<HTMLSpanElement>("mute-button-label");
 const pausePanel = requiredElement<HTMLElement>("pause-panel");
 const resumeButton = requiredElement<HTMLButtonElement>("resume-button");
+const pauseRestartButton = requiredElement<HTMLButtonElement>("pause-restart-button");
+const pauseScore = requiredElement<HTMLElement>("pause-score");
+const pauseLevel = requiredElement<HTMLElement>("pause-level");
+const pauseLives = requiredElement<HTMLElement>("pause-lives");
 const endPanel = requiredElement<HTMLElement>("end-panel");
 const endScore = requiredElement<HTMLElement>("end-score");
 const endLevel = requiredElement<HTMLElement>("end-level");
@@ -269,6 +273,7 @@ hudRestartButton.addEventListener("click", () => restart());
 splash.addEventListener("click", dismissSplash);
 pauseButton.addEventListener("click", () => setPaused(!paused));
 resumeButton.addEventListener("click", () => setPaused(false));
+pauseRestartButton.addEventListener("click", () => restart());
 muteButton.addEventListener("click", () => setMuted(!audio.isMuted));
 window.addEventListener("pointerdown", () => audio.unlock());
 setMuteButtonState(audio.isMuted);
@@ -280,6 +285,11 @@ function setPaused(value: boolean): void {
   keys.clear();
   updateInput();
   pausePanel.hidden = !paused;
+  if (paused) {
+    pauseScore.textContent = String(state.score).padStart(5, "0");
+    pauseLevel.textContent = String(state.level).padStart(2, "0");
+    pauseLives.textContent = String(state.lives);
+  }
   setPauseButtonState(paused);
   pauseButton.disabled = false;
 }

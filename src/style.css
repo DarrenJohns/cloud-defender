@@ -236,11 +236,6 @@ body {
   line-height: 1.55;
 }
 
-.pause-panel span {
-  color: #b7c9dd;
-  font-size: 12px;
-}
-
 .end-panel {
   width: min(340px, calc(100% - 40px));
 }
@@ -508,7 +503,66 @@ body {
   letter-spacing: 0.06em;
 }
 
+.breach-button-secondary {
+  border-color: #8fb7cc33;
+  background: transparent;
+  color: #9fb8c9;
+}
+
+.standby-panel::before {
+  background: linear-gradient(135deg, #c9a462aa, #5fb4d833 40%, #5fb4d833 60%, #5fb4d899);
+}
+
+.standby-panel .breach-header {
+  border-bottom-color: #c9a46233;
+  background: #c9a46212;
+  color: #cdbb98;
+}
+
+.standby-panel .breach-dot {
+  background: #c9a462;
+  box-shadow: 0 0 8px #c9a462;
+  animation: standby-breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes standby-breathe {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.standby-panel .breach-code {
+  color: #8a7c62;
+}
+
+.standby-panel .breach-title {
+  color: #dbe9f5;
+  letter-spacing: 0.32em;
+  text-shadow: 0 0 18px #5fb4d855;
+  animation: standby-breathe-title 3.2s ease-in-out infinite;
+}
+
+@keyframes standby-breathe-title {
+  50% {
+    text-shadow: 0 0 26px #5fb4d888;
+    opacity: 0.82;
+  }
+}
+
+.standby-panel .breach-stats {
+  margin-bottom: 20px;
+}
+
+.standby-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .standby-panel .breach-dot,
+  .standby-panel .breach-title,
   .breach-panel,
   .breach-panel::after,
   .breach-title::before,
