@@ -1,16 +1,56 @@
 import { describe, expect, it } from "vitest";
 import {
-  createGameState,
+  createGameState as createNewGame,
   damageShieldAt,
+  erodeShieldsUnderEnemies,
+  FAST_FORWARD_ENEMY_MULTIPLIER,
+  FORMATION_INTRO_SECONDS,
+  GROUND_Y,
   isShieldDamagedAt,
   PLAYER_LIMIT,
   PLAYER_Y,
+  updateAftermath,
   updateGame,
 } from "./gameLogic";
 
 const idle = { left: false, right: false, fire: false };
 
+// Most scenarios exercise live combat, so skip the wave's fly-in by default.
+function createGameState(seed?: number): ReturnType<typeof createNewGame> {
+  const state = createNewGame(seed);
+  state.formationIntro = 0;
+  return state;
+}
+
 describe("game simulation", () => {
+  it("holds the wave inert while it flies into formation", () => {
+    const state = createNewGame(7);
+    expect(state.formationIntro).toBe(FORMATION_INTRO_SECONDS);
+    const formation = state.enemies.map((enemy) => ({ x: enemy.x, y: enemy.y }));
+    state.enemyFireCooldown = 0;
+
+    updateGame(state, { ...idle, right: true, fire: true }, 0.05);
+
+    expect(state.shipX).toBeGreaterThan(0);
+    expect(state.playerShots).toHaveLength(0);
+    expect(state.enemyShots).toHaveLength(0);
+    expect(state.enemies.map((enemy) => ({ x: enemy.x, y: enemy.y }))).toEqual(formation);
+
+    for (let elapsed = 0; elapsed < FORMATION_INTRO_SECONDS + 0.1; elapsed += 0.05) {
+      updateGame(state, idle, 0.05, () => 0.5);
+    }
+    expect(state.formationIntro).toBe(0);
+    expect(state.enemies[0]!.x).not.toBe(formation[0]!.x);
+  });
+
+  it("flies each new wave in after the previous one is cleared", () => {
+    const state = createGameState();
+    state.enemies = [];
+    updateGame(state, idle, 0.016);
+
+    expect(state.level).toBe(2);
+    expect(state.formationIntro).toBe(FORMATION_INTRO_SECONDS);
+  });
   it("moves the ship and keeps it inside the playfield", () => {
     const state = createGameState();
     updateGame(state, { ...idle, right: true }, 0.05);
@@ -52,6 +92,7 @@ describe("game simulation", () => {
       if (level < 4) {
         state.enemies = [];
         updateGame(state, idle, 0.016);
+        state.formationIntro = 0;
       }
     }
 
@@ -191,6 +232,71 @@ describe("game simulation", () => {
     expect(state.enemyShots).toHaveLength(0);
     expect(shield.damageHoles.length).toBeGreaterThan(0);
     expect(state.shieldHits).toHaveLength(1);
+  });
+
+  it("lets aliens chew through the firewall they overlap", () => {
+    const state = createGameState(123);
+    const shield = state.shields[1]!;
+    state.enemies = [{ ...state.enemies[0]!, x: shield.x, y: shield.y }];
+
+    erodeShieldsUnderEnemies(state);
+
+    expect(isShieldDamagedAt(shield, shield.x, shield.y)).toBe(true);
+    expect(shield.damageHoles.length).toBeGreaterThan(0);
+    expect(shield.damageHoles.length).toBeLessThanOrEqual(64);
+    expect(state.shieldHits.length).toBe(shield.damageHoles.length);
+    for (const other of state.shields.filter((candidate) => candidate !== shield)) {
+      expect(other.damageHoles).toHaveLength(0);
+    }
+
+    const holeCount = shield.damageHoles.length;
+    erodeShieldsUnderEnemies(state);
+    expect(shield.damageHoles.length).toBe(holeCount);
+  });
+
+  it("fast-forwards alien movement while held", () => {
+    const normal = createGameState(1);
+    const fast = createGameState(1);
+    normal.enemyFireCooldown = fast.enemyFireCooldown = 100;
+    const startX = normal.enemies[0]!.x;
+
+    updateGame(normal, idle, 0.05);
+    updateGame(fast, { ...idle, fastForward: true }, 0.05);
+
+    const normalStep = normal.enemies[0]!.x - startX;
+    expect(fast.enemies[0]!.x - startX).toBeCloseTo(normalStep * FAST_FORWARD_ENEMY_MULTIPLIER);
+  });
+
+  it("splats alien bombs on the ground in line with the A", () => {
+    const state = createGameState(5);
+    state.enemyFireCooldown = 100;
+    state.shipX = -6;
+    state.enemyShots = [{ id: 90, x: 2, y: GROUND_Y + 0.05 }];
+
+    updateGame(state, idle, 0.05);
+
+    expect(state.enemyShots).toHaveLength(0);
+    expect(state.groundImpacts).toHaveLength(1);
+    expect(state.groundImpacts[0]!.x).toBeCloseTo(2);
+    expect(state.lives).toBe(3);
+  });
+
+  it("lets shots in flight finish after the game is over", () => {
+    const state = createGameState(5);
+    state.mode = "gameover";
+    const score = state.score;
+    const enemy = state.enemies[0]!;
+    state.playerShots = [{ id: 91, x: enemy.x, y: enemy.y - 0.6 }];
+    state.enemyShots = [{ id: 92, x: 2, y: GROUND_Y + 0.4 }];
+    const enemyCount = state.enemies.length;
+
+    for (let step = 0; step < 80; step += 1) updateAftermath(state, 0.05);
+
+    expect(state.playerShots).toHaveLength(0);
+    expect(state.enemyShots).toHaveLength(0);
+    expect(state.groundImpacts).toHaveLength(1);
+    expect(state.enemies).toHaveLength(enemyCount);
+    expect(state.score).toBe(score);
   });
 
   it("starts each new game with intact shields", () => {

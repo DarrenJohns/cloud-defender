@@ -12,8 +12,13 @@ The page displays a clear model-load message if any GLB is missing or invalid. T
 
 ## Controls
 
+- **Enter**, **Space** or click: start the game from the Cloud Defender title screen, shown before every new game
 - Left/right arrows or **A/D**: move
 - **Space**: fire
+- **P**: pause or resume
+- **F** (hold): fast-forward the alien invaders at 4× speed
+- **R**: restart at any time
+- **T**: trigger the player death animation immediately; press again to try the next fall
 - **Enter**: restart after losing
 
 ## Checks

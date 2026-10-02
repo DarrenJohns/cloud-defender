@@ -17,25 +17,63 @@
     <main class="game-shell">
       <div id="game" class="game-viewport" aria-label="Azure Invaders game">
         <div class="hud" aria-live="polite">
-          <div class="brand">
-            <span class="brand-mark" aria-hidden="true"></span>
-            <span>AZURE <b>DEFENDER</b></span>
-          </div>
           <div class="hud-stats">
             <div><span class="hud-label">LEVEL</span><strong id="level">01</strong></div>
             <div><span class="hud-label">SCORE</span><strong id="score">00000</strong></div>
             <div><span class="hud-label">SHIELDS</span><strong id="lives">3</strong></div>
           </div>
+          <div class="game-controls">
+            <button id="pause-button" class="hud-button" type="button" data-state="playing" data-tip="Pause · P" aria-label="Pause (P)" disabled>
+              <svg class="hud-icon icon-pause" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="2.5" width="3" height="11" rx="0.6" /><rect x="9.5" y="2.5" width="3" height="11" rx="0.6" /></svg>
+              <svg class="hud-icon icon-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.6v10.8a.6.6 0 0 0 .9.5l8.4-5.4a.6.6 0 0 0 0-1L5.4 2.1a.6.6 0 0 0-.9.5z" /></svg>
+              <span id="pause-button-label" class="hud-button-label">Pause</span>
+              <kbd class="hud-key">P</kbd>
+            </button>
+            <button id="hud-restart-button" class="hud-button" type="button" data-tip="Restart · R" aria-label="Restart (R)" disabled>
+              <svg class="hud-icon" viewBox="0 0 16 16" aria-hidden="true"><path class="hud-icon-stroke" d="M13 8a5 5 0 1 1-1.5-3.6" /><path d="M13.6 1.8v4.1H9.5z" /></svg>
+              <span class="hud-button-label">Restart</span>
+              <kbd class="hud-key">R</kbd>
+            </button>
+          </div>
         </div>
+
+        <section id="pause-panel" class="end-panel pause-panel" aria-live="polite" hidden>
+          <p class="end-title">Game paused</p>
+          <span>Press P or select Resume to continue.</span>
+          <button id="resume-button" type="button">Resume</button>
+        </section>
 
         <section id="asset-notice" class="asset-notice" role="alert" hidden>
           <strong>Game model unavailable</strong>
           <span id="asset-error-message">Check the models in public/assets, then reload.</span>
         </section>
 
-        <section id="end-panel" class="end-panel" aria-live="polite" hidden>
-          <p id="end-title" class="end-title"></p>
-          <button id="restart-button" type="button">Play again</button>
+        <div class="end-backdrop" aria-hidden="true"></div>
+        <section id="end-panel" class="end-panel breach-panel" aria-live="polite" hidden>
+          <div class="breach-header">
+            <span class="breach-dot" aria-hidden="true"></span>
+            <span>DEFENDER.SYS</span>
+            <span class="breach-code">ERR 0xDEAD</span>
+          </div>
+          <p id="end-title" class="end-title breach-title" data-text="SYSTEM BREACHED">SYSTEM BREACHED</p>
+          <p class="breach-subtitle">The cloud perimeter has been compromised</p>
+          <dl class="breach-stats">
+            <div><dt>Final score</dt><dd id="end-score">00000</dd></div>
+            <div><dt>Wave reached</dt><dd id="end-level">01</dd></div>
+            <div><dt>Threats purged</dt><dd id="end-kills">0</dd></div>
+          </dl>
+          <p id="end-best" class="breach-best">Best <span id="end-best-score">00000</span></p>
+          <button id="restart-button" class="breach-button" type="button">
+            <span>Reboot defences</span>
+            <kbd>Enter</kbd>
+          </button>
+        </section>
+
+        <section id="splash" class="splash" aria-label="Cloud Defender title screen">
+          <div class="splash-window">
+            <img class="splash-image" src="/assets/splashscreen.png" alt="Cloud Defender" />
+            <p id="splash-prompt" class="splash-prompt">Loading…</p>
+          </div>
         </section>
 
       </div>
