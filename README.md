@@ -43,3 +43,7 @@ The simulation uses a seeded random generator and a fixed 240 Hz step. Add `?see
 - `src/main.ts` runs the fixed-step loop and routes events to audio, the HUD and the 3D scene.
 - `src/game/gameScene.ts` owns the Three.js scene; its helpers live in `src/game/scene/` (background, bombs, formation, mystery ship, shadows, shield material, textures and shared constants).
 - Models use embedded WebP textures (up to 1024 px); the title art is `public/assets/splashscreen.webp`.
+
+## Asset provenance
+
+The 3D assets were created from PNG source images using [image-to-WebGL](https://github.com/DarrenJohns/djtools/tree/dev/apps/image-to-webgl).
