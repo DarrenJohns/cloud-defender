@@ -1,6 +1,7 @@
 import "./style.css";
 import { GameScene } from "./game/gameScene";
-import { createGameState, updateAftermath, updateGame } from "./game/gameLogic";
+import { GameAudio } from "./game/audio";
+import { FAST_FORWARD_ENEMY_MULTIPLIER, createGameState, updateAftermath, updateGame } from "./game/gameLogic";
 import type { GameInput, GameMode } from "./game/gameLogic";
 
 function requiredElement<T extends HTMLElement>(id: string): T {
@@ -18,6 +19,8 @@ const livesElement = requiredElement<HTMLElement>("lives");
 const pauseButton = requiredElement<HTMLButtonElement>("pause-button");
 const hudRestartButton = requiredElement<HTMLButtonElement>("hud-restart-button");
 const pauseButtonLabel = requiredElement<HTMLSpanElement>("pause-button-label");
+const muteButton = requiredElement<HTMLButtonElement>("mute-button");
+const muteButtonLabel = requiredElement<HTMLSpanElement>("mute-button-label");
 const pausePanel = requiredElement<HTMLElement>("pause-panel");
 const resumeButton = requiredElement<HTMLButtonElement>("resume-button");
 const endPanel = requiredElement<HTMLElement>("end-panel");
@@ -43,6 +46,71 @@ let splashHideTimer: number | undefined;
 let sceneSeconds = 0;
 const keys = new Set<string>();
 const input: GameInput = { left: false, right: false, fire: false };
+
+const MUTED_KEY = "cloud-defender.muted";
+
+function readMuted(): boolean {
+  try {
+    return window.localStorage.getItem(MUTED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+const audio = new GameAudio(readMuted());
+// Highest projectile ids already heard, so each new shot plays its sound exactly once.
+let heardPlayerShotId = -1;
+let heardEnemyShotId = -1;
+let heardMode: GameMode = "playing";
+
+function setMuted(muted: boolean): void {
+  audio.unlock();
+  audio.setMuted(muted);
+  try {
+    window.localStorage.setItem(MUTED_KEY, muted ? "1" : "0");
+  } catch {
+    // Storage can be unavailable (private mode); mute still applies for this visit.
+  }
+  setMuteButtonState(muted);
+}
+
+function setMuteButtonState(muted: boolean): void {
+  muteButton.dataset.state = muted ? "muted" : "sound";
+  muteButtonLabel.textContent = muted ? "Unmute" : "Mute";
+  muteButton.dataset.tip = muted ? "Unmute · M" : "Mute · M";
+  muteButton.setAttribute("aria-label", muted ? "Unmute (M)" : "Mute (M)");
+}
+
+function resetAudioTracking(): void {
+  heardPlayerShotId = -1;
+  heardEnemyShotId = -1;
+  heardMode = state.mode;
+  audio.resetMarch();
+}
+
+function newestShotId(shots: readonly { id: number }[], heard: number): number {
+  return shots.reduce((newest, shot) => Math.max(newest, shot.id), heard);
+}
+
+function playStateSounds(before: { enemies: number; level: number; lives: number }, aftermath: boolean): void {
+  const playerShotId = newestShotId(state.playerShots, heardPlayerShotId);
+  if (playerShotId > heardPlayerShotId) audio.playerFire();
+  heardPlayerShotId = playerShotId;
+  const enemyShotId = newestShotId(state.enemyShots, heardEnemyShotId);
+  if (enemyShotId > heardEnemyShotId) audio.alienFire();
+  heardEnemyShotId = enemyShotId;
+
+  if (state.level !== before.level) {
+    audio.alienDestroyed(Math.max(1, before.enemies));
+    audio.waveCleared();
+    audio.formationFlyIn();
+  } else if (state.enemies.length < before.enemies) {
+    audio.alienDestroyed(before.enemies - state.enemies.length);
+  }
+  if (state.lives < before.lives) audio.playerHit();
+  if (state.shieldHits.length > 0) audio.firewallHit(aftermath);
+  if (state.groundImpacts.length > 0) audio.groundHit(aftermath);
+}
 
 function updateInput(): void {
   input.left = keys.has("ArrowLeft") || keys.has("KeyA");
@@ -106,6 +174,9 @@ function dismissSplash(): void {
   splashVisible = false;
   keys.clear();
   updateInput();
+  audio.unlock();
+  resetAudioTracking();
+  audio.formationFlyIn();
   splash.classList.add("is-leaving");
   // The aliens start their fly-in while the title fades away.
   splashHideTimer = window.setTimeout(() => {
@@ -136,6 +207,11 @@ function onAssetsReady(): void {
 
 window.addEventListener("keydown", (event) => {
   if (["ArrowLeft", "ArrowRight", "Space"].includes(event.code)) event.preventDefault();
+  if (event.code === "KeyM") {
+    if (!event.repeat) setMuted(!audio.isMuted);
+    return;
+  }
+  audio.unlock();
   if (splashVisible) {
     if (!event.repeat && ["Enter", "Space"].includes(event.code)) dismissSplash();
     return;
@@ -178,6 +254,8 @@ function restart(withSplash = true): void {
   gameScene.resetForRestart();
   state = createGameState();
   paused = false;
+  audio.setPaused(false);
+  resetAudioTracking();
   keys.clear();
   updateInput();
   pausePanel.hidden = true;
@@ -191,10 +269,14 @@ hudRestartButton.addEventListener("click", () => restart());
 splash.addEventListener("click", dismissSplash);
 pauseButton.addEventListener("click", () => setPaused(!paused));
 resumeButton.addEventListener("click", () => setPaused(false));
+muteButton.addEventListener("click", () => setMuted(!audio.isMuted));
+window.addEventListener("pointerdown", () => audio.unlock());
+setMuteButtonState(audio.isMuted);
 
 function setPaused(value: boolean): void {
   if (state.mode !== "playing" || splashVisible || !assetsReady()) return;
   paused = value;
+  audio.setPaused(paused);
   keys.clear();
   updateInput();
   pausePanel.hidden = !paused;
@@ -255,12 +337,23 @@ function animate(now: number): void {
   const deltaSeconds = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
 
+  const before = { enemies: state.enemies.length, level: state.level, lives: state.lives };
   if (assetsReady() && state.mode === "playing" && !paused && !splashVisible) {
     updateGame(state, input, deltaSeconds);
+    playStateSounds(before, false);
+    if (state.mode === "playing" && state.formationIntro === 0 && state.enemies.length > 0) {
+      const speed = state.enemySpeed * (input.fastForward ? FAST_FORWARD_ENEMY_MULTIPLIER : 1);
+      audio.updateMarch(deltaSeconds, state.enemies.length, speed);
+    } else {
+      audio.resetMarch();
+    }
     updateHud();
   } else if (assetsReady() && state.mode !== "playing" && !paused) {
     updateAftermath(state, deltaSeconds);
+    playStateSounds(before, true);
   }
+  if (state.mode === "gameover" && heardMode === "playing") audio.gameOver();
+  heardMode = state.mode;
   if (!paused) sceneSeconds += deltaSeconds;
   gameScene.update(state, paused ? 0 : deltaSeconds, sceneSeconds);
   if (state.mode === "gameover") updateHud();

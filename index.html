@@ -23,6 +23,12 @@
             <div><span class="hud-label">SHIELDS</span><strong id="lives">3</strong></div>
           </div>
           <div class="game-controls">
+            <button id="mute-button" class="hud-button" type="button" data-state="sound" data-tip="Mute · M" aria-label="Mute (M)">
+              <svg class="hud-icon icon-sound" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6h2.6L8 3v10L4.6 10H2z" /><path class="hud-icon-stroke" d="M10.5 5.6a3.2 3.2 0 0 1 0 4.8M12.4 3.8a5.8 5.8 0 0 1 0 8.4" /></svg>
+              <svg class="hud-icon icon-muted" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6h2.6L8 3v10L4.6 10H2z" /><path class="hud-icon-stroke" d="M10.5 6l4 4M14.5 6l-4 4" /></svg>
+              <span id="mute-button-label" class="hud-button-label">Mute</span>
+              <kbd class="hud-key">M</kbd>
+            </button>
             <button id="pause-button" class="hud-button" type="button" data-state="playing" data-tip="Pause · P" aria-label="Pause (P)" disabled>
               <svg class="hud-icon icon-pause" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="2.5" width="3" height="11" rx="0.6" /><rect x="9.5" y="2.5" width="3" height="11" rx="0.6" /></svg>
               <svg class="hud-icon icon-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.6v10.8a.6.6 0 0 0 .9.5l8.4-5.4a.6.6 0 0 0 0-1L5.4 2.1a.6.6 0 0 0-.9.5z" /></svg>

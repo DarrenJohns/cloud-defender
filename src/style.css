@@ -154,6 +154,15 @@ body {
   display: block;
 }
 
+.hud-button .icon-muted,
+.hud-button[data-state="muted"] .icon-sound {
+  display: none;
+}
+
+.hud-button[data-state="muted"] .icon-muted {
+  display: block;
+}
+
 .hud-button-label,
 .hud-key {
   display: none;
