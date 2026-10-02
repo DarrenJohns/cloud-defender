@@ -1,70 +1,16 @@
-import {
-  AmbientLight,
-  AdditiveBlending,
-  BoxGeometry,
-  BufferGeometry,
-  Box3,
-  CanvasTexture,
-  Color,
-  CylinderGeometry,
-  DirectionalLight,
-  DoubleSide,
-  Float32BufferAttribute,
-  Group,
-  IcosahedronGeometry,
-  InstancedBufferAttribute,
-  InstancedMesh,
-  Matrix4,
-  Material,
-  Mesh,
-  NearestFilter,
-  MeshBasicMaterial,
-  MeshStandardMaterial,
-  Object3D,
-  PerspectiveCamera,
-  PCFSoftShadowMap,
-  PlaneGeometry,
-  NormalBlending,
-  PointLight,
-  Points,
-  Scene,
-  SRGBColorSpace,
-  Sprite,
-  SpriteMaterial,
-  ShaderMaterial,
-  Vector2,
-  Vector3,
-  Vector4,
-  WebGLRenderer,
-} from "three";
+import { AdditiveBlending, AmbientLight, Box3, BoxGeometry, BufferGeometry, CanvasTexture, DirectionalLight, Group, IcosahedronGeometry, InstancedMesh, Material, Matrix4, Mesh, MeshBasicMaterial, MeshStandardMaterial, NormalBlending, Object3D, OctahedronGeometry, PCFSoftShadowMap, PerspectiveCamera, PlaneGeometry, PointLight, Points, Scene, ShaderMaterial, SphereGeometry, Sprite, SpriteMaterial, TorusGeometry, Vector2, Vector3, Vector4, WebGLRenderer } from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import type { DamageHole, GameState, GroundImpact, Projectile, ShieldHit } from "./gameLogic";
-import { ALIEN_VARIANT_COUNT, FORMATION_INTRO_SECONDS, GROUND_Y, PLAYER_MUZZLE_OFFSET, PLAYER_Y, SHIELD_HEIGHT, SHIELD_WIDTH, SHIELD_Y, WORLD_WIDTH, isShieldDamagedAt } from "./gameLogic";
-
-const HALF_WIDTH = WORLD_WIDTH / 2;
-const CAMERA_DISTANCE = 20;
-// Smallest world height kept in view so the full play field fits on wide, short screens.
-const MIN_VIEW_HEIGHT = 15.6;
-const CAMERA_HEIGHT = 2;
-// Maximum camera offset (world units) when the mouse is at the window edge.
-const PARALLAX_X = 4.5;
-const PARALLAX_Y = 2.2;
-const PARALLAX_EASE = 5;
-// Far layers are oversized so the parallax offset never reveals their edges.
-const PARALLAX_OVERSCAN = 1.6;
-const BACKGROUND_DISTANCE = 30;
-const PLAYER_SHADOW_Y = GROUND_Y;
-// Depth plane projectiles travel in; bomb splats land on the floor at this depth, in line with the A.
-const BOMB_DEPTH = 0.2;
-const PLAYER_GROUND_Y = PLAYER_SHADOW_Y;
-const DAMAGE_HOLE_CAPACITY = 64;
-// Visible crater radius as a fraction of the logical damage-hole radius.
-const HOLE_CUT_FACTOR = 0.74;
-const SHIELD_CHUNK_COLORS = ["#e13d48", "#fa606a", "#9e202d"];
-const ALIEN_MODEL_PATHS = Array.from(
-  { length: ALIEN_VARIANT_COUNT },
-  (_, index) => `/assets/alien${index + 1}.glb`,
-);
+import type { BombCancel, GameEvent, GameState, GroundImpact, MysteryHit, Projectile, ShieldHit } from "./gameLogic";
+import { ALIEN_VARIANT_COUNT, FORMATION_INTRO_SECONDS, GROUND_Y, MYSTERY_EDGE, MYSTERY_Y, PLAYER_MUZZLE_OFFSET, PLAYER_Y, SHIELD_HEIGHT, SHIELD_WIDTH, SHIELD_Y, WORLD_WIDTH, WORM_AMPLITUDE, WORM_FREQUENCY } from "./gameLogic";
+import { ALIEN_MODEL_PATHS, BACKGROUND_DISTANCE, BOMB_DEPTH, CAMERA_DISTANCE, CAMERA_HEIGHT, DAMAGE_HOLE_CAPACITY, HALF_WIDTH, MIN_VIEW_HEIGHT, PARALLAX_EASE, PARALLAX_OVERSCAN, PARALLAX_X, PARALLAX_Y, PLAYER_GROUND_Y, PLAYER_SHADOW_Y, SHIELD_CHUNK_COLORS } from "./scene/constants";
+import { createCloudHazeTexture, createDustTexture, createMuzzleFlareTexture, createScorePopupTexture, seededRandom } from "./scene/textures";
+import { STAR_COUNT, STAR_LOWEST_SCREEN_Y, STAR_MARGIN_HEIGHT, STAR_PLANE_Z, drawBackground, makeCloud, makeGradientMaterial, makeStarField } from "./scene/background";
+import { makeErodibleMaterial, makeHoleWalls, setDamageUniforms } from "./scene/shieldMaterial";
+import { ALIEN_DEPTH_MULTIPLIER, ROW_SHADOW_LIFT, SHIP_SHADOW_DEPTH, SHIP_SHADOW_WIDTH, drawShieldShadow, makeAlienShadow, makeShieldShadow, makeShipShadow, updateAlienShadow } from "./scene/shadows";
+import type { ShieldShadow } from "./scene/shadows";
+import { MYSTERY_BEACON_COUNT, makeMysteryShip } from "./scene/mysteryShip";
+import { formationFlightPose, makeEnemy } from "./scene/formation";
+import { BINARY_FLICKER_SECONDS, BINARY_GLYPH_HEIGHT, BINARY_GLYPH_SPACING, BOMB_CANCEL_COLORS, HEX_GLYPH_HEIGHT, HEX_GLYPH_WIDTH, MALWARE_CUBE_SIZE, WORM_SEGMENT_LAG, WORM_SEGMENT_SPACING, createBinaryGlyphTextures, createHexGlyphTextures, createMalwareFaceTextures, makeBinaryStream, makeMalwareBomb, makeRansomwareBomb, makeWormBomb } from "./scene/bombs";
 
 interface CloudMotion {
   x: number;
@@ -118,605 +64,14 @@ interface PlayerDeathAnimation {
   smokeSeed: number;
 }
 
-function createDustTexture(): CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 64;
-  canvas.height = 64;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("A 2D canvas context is required to render hit dust.");
-  const gradient = context.createRadialGradient(32, 32, 2, 32, 32, 31);
-  gradient.addColorStop(0, "rgba(255, 236, 215, 0.75)");
-  gradient.addColorStop(0.35, "rgba(220, 174, 151, 0.42)");
-  gradient.addColorStop(1, "rgba(130, 106, 105, 0)");
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, 64, 64);
-  return new CanvasTexture(canvas);
+interface ScorePopup {
+  sprite: Sprite;
+  age: number;
+  startY: number;
 }
 
-function createMuzzleFlareTexture(): CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 128;
-  canvas.height = 128;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("A 2D canvas context is required to render the muzzle flare.");
-  const glow = context.createRadialGradient(64, 64, 0, 64, 64, 60);
-  glow.addColorStop(0, "rgba(255, 255, 255, 1)");
-  glow.addColorStop(0.18, "rgba(170, 238, 255, 0.85)");
-  glow.addColorStop(0.5, "rgba(40, 170, 255, 0.25)");
-  glow.addColorStop(1, "rgba(0, 120, 255, 0)");
-  context.fillStyle = glow;
-  context.fillRect(0, 0, 128, 128);
-  for (const [width, height] of [
-    [128, 5],
-    [5, 128],
-  ] as const) {
-    const streak = context.createRadialGradient(64, 64, 0, 64, 64, 64);
-    streak.addColorStop(0, "rgba(230, 250, 255, 0.95)");
-    streak.addColorStop(1, "rgba(80, 200, 255, 0)");
-    context.fillStyle = streak;
-    context.fillRect(64 - width / 2, 64 - height / 2, width, height);
-  }
-  const texture = new CanvasTexture(canvas);
-  texture.colorSpace = SRGBColorSpace;
-  return texture;
-}
+const SCORE_POPUP_LIFETIME = 1.3;
 
-function createCloudHazeTexture(): CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 128;
-  canvas.height = 128;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("A 2D canvas context is required to render cloud haze.");
-  const gradient = context.createRadialGradient(64, 64, 18, 64, 64, 64);
-  gradient.addColorStop(0, "rgba(255, 255, 255, 0.52)");
-  gradient.addColorStop(0.55, "rgba(255, 255, 255, 0.2)");
-  gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, 128, 128);
-  return new CanvasTexture(canvas);
-}
-
-function seededRandom(seed: number): () => number {
-  let value = seed >>> 0 || 1;
-  return () => {
-    value ^= value << 13;
-    value ^= value >>> 17;
-    value ^= value << 5;
-    return (value >>> 0) / 0x1_0000_0000;
-  };
-}
-
-function drawBackground(
-  context: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-  viewHeight: number,
-): void {
-  const image = context.createImageData(width, height);
-  const floorColor = [21, 43, 65];
-  const backdropColor = [5, 13, 27];
-  const nightSkyColor = [1, 3, 10];
-  const floorLevel = PLAYER_Y - 0.45;
-  const blendHeight = SHIELD_Y - SHIELD_HEIGHT / 2 - 0.25 - floorLevel;
-
-  for (let row = 0; row < height; row += 1) {
-    const worldY = (0.5 - (row + 0.5) / height) * viewHeight;
-    const floorPosition = Math.max(0, Math.min(1, (worldY - floorLevel) / blendHeight));
-    const floorBlend = floorPosition * floorPosition * (3 - 2 * floorPosition);
-    const nightPosition = Math.max(0, Math.min(1, (worldY - viewHeight * 0.2) / (viewHeight * 0.3)));
-    const nightBlend = nightPosition * nightPosition * (3 - 2 * nightPosition);
-    for (let column = 0; column < width; column += 1) {
-      const pixel = (row * width + column) * 4;
-      for (let channel = 0; channel < 3; channel += 1) {
-        const lowerGradient =
-          floorColor[channel]! +
-          (backdropColor[channel]! - floorColor[channel]!) * floorBlend;
-        image.data[pixel + channel] = Math.round(
-          lowerGradient + (nightSkyColor[channel]! - lowerGradient) * nightBlend,
-        );
-      }
-      image.data[pixel + 3] = 255;
-    }
-  }
-  context.putImageData(image, 0, 0);
-}
-
-const STAR_COUNT = 220;
-// Extra stars that live only in the off-screen margin revealed by mouse parallax.
-const STAR_MARGIN_COUNT = 340;
-// Margin stars reach this far above the normal top-of-screen (1 = top edge).
-const STAR_MARGIN_HEIGHT = 1.5;
-const STAR_PLANE_Z = -9.4;
-// Stars fill the sky from just below screen centre to the top edge, thinning toward the horizon.
-const STAR_LOWEST_SCREEN_Y = -0.18;
-
-function makeStarField(): { points: Points; material: ShaderMaterial } {
-  const geometry = new BufferGeometry();
-  const random = seededRandom(0x51a7);
-  const count = STAR_COUNT + STAR_MARGIN_COUNT;
-  geometry.setAttribute("position", new Float32BufferAttribute(new Float32Array(count * 3), 3));
-  geometry.setAttribute(
-    "aSize",
-    new Float32BufferAttribute(
-      Array.from({ length: count }, () => {
-        const sparkle = random() < 0.12;
-        return sparkle ? 0.07 + random() * 0.04 : 0.022 + random() * 0.035;
-      }),
-      1,
-    ),
-  );
-  geometry.setAttribute(
-    "aPhase",
-    new Float32BufferAttribute(Array.from({ length: count }, () => random() * Math.PI * 2), 1),
-  );
-  geometry.setAttribute(
-    "aBrightness",
-    new Float32BufferAttribute(new Float32Array(count).fill(1), 1),
-  );
-  const material = new ShaderMaterial({
-    uniforms: {
-      uTime: { value: 0 },
-      uPixelScale: { value: 1 },
-    },
-    transparent: true,
-    depthWrite: false,
-    blending: AdditiveBlending,
-    vertexShader: `
-      attribute float aSize;
-      attribute float aPhase;
-      attribute float aBrightness;
-      uniform float uTime;
-      uniform float uPixelScale;
-      varying float vTwinkle;
-      varying float vSparkle;
-      void main() {
-        float speed = 0.7 + fract(aPhase * 0.37) * 1.5;
-        vTwinkle = (0.25 + 0.75 * (0.5 + 0.5 * sin(uTime * speed + aPhase))) * aBrightness;
-        vSparkle = smoothstep(0.06, 0.08, aSize);
-        vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
-        gl_Position = projectionMatrix * viewPosition;
-        gl_PointSize = aSize * uPixelScale * (0.75 + vTwinkle * 0.5);
-      }
-    `,
-    fragmentShader: `
-      varying float vTwinkle;
-      varying float vSparkle;
-      void main() {
-        vec2 offset = gl_PointCoord - vec2(0.5);
-        float distanceFromCenter = length(offset);
-        float core = 1.0 - smoothstep(0.08, 0.32, distanceFromCenter);
-        float glow = 1.0 - smoothstep(0.12, 0.5, distanceFromCenter);
-        float rays = max(
-          1.0 - smoothstep(0.0, 0.035, abs(offset.x)),
-          1.0 - smoothstep(0.0, 0.035, abs(offset.y))
-        ) * (1.0 - smoothstep(0.1, 0.5, distanceFromCenter));
-        float sparkleCore = 1.0 - smoothstep(0.02, 0.12, distanceFromCenter);
-        float plain = core * 0.75 + glow * 0.25;
-        float sparkle = sparkleCore + rays * 0.9 + glow * 0.12;
-        float alpha = mix(plain, sparkle, vSparkle) * vTwinkle;
-        gl_FragColor = vec4(vec3(0.67, 0.84, 1.0), alpha);
-      }
-    `,
-  });
-  const points = new Points(geometry, material);
-  points.position.z = STAR_PLANE_Z;
-  // Drawn after the clouds so the clouds' depth hides any star behind them.
-  points.renderOrder = 1;
-  return { points, material };
-}
-
-function makeGradientMaterial(): { material: MeshBasicMaterial; texture: CanvasTexture } {
-  const canvas = document.createElement("canvas");
-  canvas.width = 1024;
-  canvas.height = 512;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("A 2D canvas context is required to render the background.");
-  drawBackground(context, canvas.width, canvas.height, WORLD_WIDTH);
-  const texture = new CanvasTexture(canvas);
-  texture.colorSpace = SRGBColorSpace;
-  return {
-    material: new MeshBasicMaterial({ map: texture, depthWrite: false }),
-    texture,
-  };
-}
-
-function softenCloudMaterial(source: Material): Material {
-  const material = source.clone();
-  material.transparent = true;
-  material.opacity *= 0.5;
-  if ("color" in material && material.color instanceof Color) {
-    // Blend toward the night-sky navy so clouds recede into the background.
-    material.color.lerp(new Color("#10243f"), 0.5);
-  }
-  if (material instanceof MeshStandardMaterial) {
-    material.roughness = 0.9;
-    material.metalness = 0;
-    material.emissive.set("#2c5c92");
-    material.emissiveIntensity = 0.05;
-  }
-  return material;
-}
-
-function makeCloud(
-  source: Group,
-  x: number,
-  y: number,
-  scale: number,
-  hazeTexture: CanvasTexture,
-): Group {
-  const cloud = source.clone(true);
-  cloud.traverse((object) => {
-    if (!(object instanceof Mesh)) return;
-    object.material = Array.isArray(object.material)
-      ? object.material.map(softenCloudMaterial)
-      : softenCloudMaterial(object.material);
-  });
-  const bounds = new Box3().setFromObject(cloud);
-  const size = bounds.getSize(new Vector3());
-  const center = bounds.getCenter(new Vector3());
-  const modelScale = (2.35 * scale) / size.x;
-  cloud.scale.setScalar(modelScale);
-  cloud.position.set(
-    x - center.x * modelScale,
-    y - center.y * modelScale,
-    -4.4 - center.z * modelScale,
-  );
-  const haze = new Sprite(new SpriteMaterial({
-    map: hazeTexture,
-    color: "#6f93bf",
-    transparent: true,
-    opacity: 0.12,
-    depthWrite: false,
-  }));
-  haze.position.z = -0.08;
-  haze.scale.set(3.4 * scale / modelScale, 1.8 * scale / modelScale, 1);
-  cloud.add(haze);
-  return cloud;
-}
-
-function makeErodibleMaterial(
-  source: MeshStandardMaterial,
-  holes: Vector4[],
-): MeshStandardMaterial {
-  const material = source.clone();
-  material.onBeforeCompile = (shader) => {
-    shader.uniforms.damageHoles = { value: holes };
-    shader.vertexShader = shader.vertexShader
-      .replace(
-        "#include <common>",
-        "#include <common>\nvarying vec3 vShieldPosition;",
-      )
-      .replace(
-        "#include <begin_vertex>",
-        "#include <begin_vertex>\nvShieldPosition = position;",
-      );
-    shader.fragmentShader = shader.fragmentShader
-      .replace(
-        "#include <common>",
-        `#include <common>
-        uniform vec4 damageHoles[${DAMAGE_HOLE_CAPACITY}];
-        varying vec3 vShieldPosition;
-        ${HOLE_EDGE_FUNCTION}
-        `,
-      )
-      .replace(
-        "#include <color_fragment>",
-        `for (int i = 0; i < ${DAMAGE_HOLE_CAPACITY}; i++) {
-          vec4 hole = damageHoles[i];
-          if (hole.z > 0.0) {
-            vec2 offset = vShieldPosition.xy - hole.xy;
-            float edge = ${HOLE_EDGE_GLSL}(offset, hole);
-            float distanceToCenter = length(offset);
-            if (distanceToCenter < edge) discard;
-            // Subtle ambient occlusion on the chipped lip around each crater.
-            float lip = smoothstep(edge, edge * 1.12, distanceToCenter);
-            diffuseColor.rgb *= mix(0.55, 1.0, lip);
-          }
-        }
-        #include <color_fragment>
-        `,
-      );
-  };
-  material.customProgramCacheKey = () => "firewall-mode-a-erosion-v2";
-  material.needsUpdate = true;
-  return material;
-}
-
-// Same jagged outline as gameLogic.isShieldDamagedAt, scaled to the visible cut radius.
-const HOLE_EDGE_GLSL = "holeEdge";
-const HOLE_EDGE_FUNCTION = `
-float holeEdge(vec2 offset, vec4 hole) {
-  float angle = atan(offset.y, offset.x);
-  return hole.z * ${HOLE_CUT_FACTOR.toFixed(3)} * (
-    0.8 +
-    0.14 * sin(angle * 2.0 + hole.w) +
-    0.08 * sin(angle * 4.0 - hole.w * 1.31) +
-    0.025 * sin(angle * 7.0 + hole.w * 2.1)
-  );
-}
-`;
-
-/**
- * Real 3D inner walls for firewall craters: one open tube per damage hole, following the
- * hole's jagged outline and spanning the firewall's depth. Tube faces that fall inside a
- * neighbouring hole or outside the firewall are discarded so overlapping holes form one cavity.
- */
-function makeHoleWalls(
-  holes: Vector4[],
-  halfWidth: number,
-  halfHeight: number,
-  depth: number,
-): InstancedMesh {
-  const geometry = new CylinderGeometry(1, 1, 1, 56, 1, true);
-  geometry.rotateX(Math.PI / 2);
-  const holeIndices = new Float32Array(DAMAGE_HOLE_CAPACITY);
-  for (let index = 0; index < DAMAGE_HOLE_CAPACITY; index += 1) holeIndices[index] = index;
-  geometry.setAttribute("holeIndex", new InstancedBufferAttribute(holeIndices, 1));
-
-  const material = new MeshStandardMaterial({
-    color: "#cf4651",
-    roughness: 0.92,
-    metalness: 0,
-    side: DoubleSide,
-  });
-  material.onBeforeCompile = (shader) => {
-    shader.uniforms.damageHoles = { value: holes };
-    shader.uniforms.wallDepth = { value: depth };
-    shader.uniforms.wallHalfSize = { value: new Vector2(halfWidth, halfHeight) };
-    const declarations = `
-      uniform vec4 damageHoles[${DAMAGE_HOLE_CAPACITY}];
-      uniform float wallDepth;
-      uniform vec2 wallHalfSize;
-      varying vec3 vWallPosition;
-      varying float vHoleIndex;
-      ${HOLE_EDGE_FUNCTION}
-    `;
-    shader.vertexShader = shader.vertexShader
-      .replace("#include <common>", `#include <common>\nattribute float holeIndex;\n${declarations}`)
-      .replace(
-        "#include <beginnormal_vertex>",
-        "vec3 objectNormal = vec3(-normalize(position.xy), 0.0);",
-      )
-      .replace(
-        "#include <begin_vertex>",
-        `vec4 wallHole = damageHoles[int(holeIndex + 0.5)];
-        vec2 wallDirection = normalize(position.xy);
-        float wallEdge = holeEdge(wallDirection, wallHole);
-        vec3 transformed = vec3(wallHole.xy + wallDirection * wallEdge, position.z * wallDepth);
-        vWallPosition = transformed;
-        vHoleIndex = holeIndex;`,
-      );
-    shader.fragmentShader = shader.fragmentShader
-      .replace("#include <common>", `#include <common>\n${declarations}`)
-      .replace(
-        "#include <color_fragment>",
-        `if (any(greaterThan(abs(vWallPosition.xy), wallHalfSize))) discard;
-        int ownHole = int(vHoleIndex + 0.5);
-        for (int i = 0; i < ${DAMAGE_HOLE_CAPACITY}; i++) {
-          vec4 hole = damageHoles[i];
-          if (i == ownHole || hole.z <= 0.0) continue;
-          vec2 offset = vWallPosition.xy - hole.xy;
-          if (length(offset) < holeEdge(offset, hole)) discard;
-        }
-        #include <color_fragment>
-        float depthFromFace = 1.0 - abs(vWallPosition.z) / (wallDepth * 0.5);
-        diffuseColor.rgb *= mix(1.0, 0.55, smoothstep(0.0, 1.0, depthFromFace));
-        `,
-      );
-  };
-  material.customProgramCacheKey = () => "firewall-hole-walls-v1";
-
-  const walls = new InstancedMesh(geometry, material, DAMAGE_HOLE_CAPACITY);
-  const identity = new Matrix4();
-  for (let index = 0; index < DAMAGE_HOLE_CAPACITY; index += 1) walls.setMatrixAt(index, identity);
-  walls.count = 0;
-  walls.frustumCulled = false;
-  walls.receiveShadow = true;
-  return walls;
-}
-
-function setDamageUniforms(
-  uniforms: Vector4[],
-  damageHoles: DamageHole[],
-  destroyed: boolean,
-): void {
-  for (const uniform of uniforms) uniform.set(0, 0, 0, 0);
-  if (destroyed) {
-    uniforms[0]!.set(0, 0, 100, 0);
-    return;
-  }
-  for (const [index, hole] of damageHoles.slice(0, uniforms.length).entries()) {
-    uniforms[index]!.set(hole.x, hole.y, hole.radius, hole.seed);
-  }
-}
-
-const SHIP_SHADOW_WIDTH = 2.6;
-const SHIP_SHADOW_DEPTH = 0.38;
-const ALIEN_SHADOW_WIDTH = 1.3;
-// Extrudes the alien GLBs along Z at load time so they read as chunkier 3D objects.
-const ALIEN_DEPTH_MULTIPLIER = 2;
-const ALIEN_SHADOW_DEPTH = 0.34;
-// Alien shadows start appearing once an alien is this far above the floor.
-const ALIEN_SHADOW_FADE_HEIGHT = 8;
-const ALIEN_SHADOW_MAX_OPACITY = 0.85;
-const SHIELD_SHADOW_MAX_OPACITY = 0.15;
-// Raised slightly above the A's shadow line so the firewalls read as standing just behind the A.
-// Aliens and firewalls share a depth row behind the A, so their shadows share one line.
-const ROW_SHADOW_LIFT = 0.28;
-const SHIELD_SHADOW_COLUMNS = 40;
-const SHIELD_SHADOW_ROWS = 10;
-const SHIELD_SHADOW_PADDING = 0.3;
-const SHIELD_SHADOW_DEPTH = 0.5;
-
-type ShieldShadow = { mesh: Mesh; canvas: HTMLCanvasElement; texture: CanvasTexture; holeCount: number; destroyed: boolean };
-
-function makeShieldShadow(): ShieldShadow {
-  const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 64;
-  const texture = new CanvasTexture(canvas);
-  const mesh = new Mesh(
-    new PlaneGeometry(SHIELD_WIDTH + SHIELD_SHADOW_PADDING * 2, SHIELD_SHADOW_DEPTH),
-    new MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false }),
-  );
-  mesh.renderOrder = -1;
-  return { mesh, canvas, texture, holeCount: -1, destroyed: false };
-}
-
-// Draws the shadow as the firewall's silhouette seen from above: each column darkens by how much
-// of the wall above it is still intact, so blasted-out sections leave matching gaps on the floor.
-function drawShieldShadow(shadow: ShieldShadow, shield: GameState["shields"][number]): void {
-  const context = shadow.canvas.getContext("2d");
-  if (!context) throw new Error("A 2D canvas context is required to render the firewall shadow.");
-  const { width, height } = shadow.canvas;
-  context.clearRect(0, 0, width, height);
-  if (shield.destroyed) {
-    shadow.texture.needsUpdate = true;
-    return;
-  }
-  const padding = (SHIELD_SHADOW_PADDING / (SHIELD_WIDTH + SHIELD_SHADOW_PADDING * 2)) * width;
-  const columnWidth = (width - padding * 2) / SHIELD_SHADOW_COLUMNS;
-  const mask = document.createElement("canvas");
-  mask.width = width;
-  mask.height = height;
-  const maskContext = mask.getContext("2d");
-  if (!maskContext) throw new Error("A 2D canvas context is required to render the firewall shadow.");
-  for (let column = 0; column < SHIELD_SHADOW_COLUMNS; column += 1) {
-    const x = shield.x - shield.width / 2 + ((column + 0.5) / SHIELD_SHADOW_COLUMNS) * shield.width;
-    let intact = 0;
-    for (let row = 0; row < SHIELD_SHADOW_ROWS; row += 1) {
-      const y = shield.y - shield.height / 2 + ((row + 0.5) / SHIELD_SHADOW_ROWS) * shield.height;
-      if (!isShieldDamagedAt(shield, x, y)) intact += 1;
-    }
-    // Taper the ends so the intact wall casts a soft ellipse like the A's shadow.
-    const along = (column + 0.5) / SHIELD_SHADOW_COLUMNS;
-    const taper = Math.sqrt(Math.max(0, 1 - Math.pow(2 * along - 1, 2)));
-    const alpha = (intact / SHIELD_SHADOW_ROWS) * (0.35 + 0.65 * taper) * SHIELD_SHADOW_MAX_OPACITY;
-    if (alpha <= 0) continue;
-    const gradient = maskContext.createLinearGradient(0, height * 0.18, 0, height * 0.82);
-    gradient.addColorStop(0, "rgba(0, 0, 0, 0)");
-    gradient.addColorStop(0.5, `rgba(0, 0, 0, ${alpha.toFixed(3)})`);
-    gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
-    maskContext.fillStyle = gradient;
-    maskContext.fillRect(Math.floor(padding + column * columnWidth), height * 0.18, Math.ceil(columnWidth) + 1, height * 0.64);
-  }
-  // One blur over the whole silhouette avoids striping between columns.
-  context.filter = "blur(7px)";
-  context.drawImage(mask, 0, 0);
-  context.filter = "none";
-  shadow.texture.needsUpdate = true;
-}
-
-function makeShipShadow(): Mesh {
-  const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 128;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("A 2D canvas context is required to render the ship shadow.");
-  const gradient = context.createRadialGradient(128, 64, 3, 128, 64, 64);
-  gradient.addColorStop(0, "rgba(0, 0, 0, 0.56)");
-  gradient.addColorStop(0.55, "rgba(0, 0, 0, 0.25)");
-  gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, canvas.width, canvas.height);
-
-  const shadow = new Mesh(
-    new PlaneGeometry(SHIP_SHADOW_WIDTH, SHIP_SHADOW_DEPTH),
-    new MeshBasicMaterial({
-      map: new CanvasTexture(canvas),
-      transparent: true,
-      depthWrite: false,
-    }),
-  );
-  shadow.position.set(0, PLAYER_SHADOW_Y, -0.15);
-  return shadow;
-}
-
-function makeAlienShadow(texture: CanvasTexture): Mesh {
-  const shadow = new Mesh(
-    new PlaneGeometry(ALIEN_SHADOW_WIDTH, ALIEN_SHADOW_DEPTH),
-    new MeshBasicMaterial({
-      map: texture,
-      transparent: true,
-      depthWrite: false,
-      opacity: 0,
-    }),
-  );
-  shadow.renderOrder = -1;
-  return shadow;
-}
-
-function updateAlienShadow(shadow: Mesh, x: number, alienY: number): void {
-  const height = Math.max(0, alienY - PLAYER_GROUND_Y);
-  const closeness = Math.max(0, Math.min(1, 1 - height / ALIEN_SHADOW_FADE_HEIGHT));
-  const eased = closeness * closeness;
-  (shadow.material as MeshBasicMaterial).opacity = eased * ALIEN_SHADOW_MAX_OPACITY;
-  const scale = 0.7 + closeness * 0.45;
-  shadow.scale.set(scale, scale, 1);
-  shadow.position.set(x, PLAYER_SHADOW_Y + ROW_SHADOW_LIFT, -0.25);
-  shadow.visible = closeness > 0;
-}
-
-interface FlightPose {
-  x: number;
-  y: number;
-  z: number;
-  bank: number;
-  pitch: number;
-  yaw: number;
-}
-
-// Each alien swoops in from off-screen (top, left or right) along a curved,
-// depth-varying path, staggered so the formation assembles organically.
-function formationFlightPose(id: number, targetX: number, targetY: number, progress: number): FlightPose {
-  const random = seededRandom(id * 7919 + 104729);
-  const side = Math.floor(random() * 3);
-  let startX: number;
-  let startY: number;
-  if (side === 0) {
-    startX = (random() - 0.5) * 22;
-    startY = 10 + random() * 3;
-  } else {
-    const direction = side === 1 ? -1 : 1;
-    startX = direction * (14 + random() * 4);
-    startY = 1 + random() * 8;
-  }
-  const startZ = 2 + random() * 4;
-  const controlX = (startX + targetX) / 2 + (random() - 0.5) * 9;
-  const controlY = Math.max(startY, targetY) + 0.5 + random() * 3.5;
-  const controlZ = startZ * 0.5 + (random() - 0.3) * 3;
-  const delay = random() * 0.42;
-  const local = Math.max(0, Math.min(1, (progress - delay) / (0.97 - delay)));
-  const t = 1 - (1 - local) ** 3;
-  const u = 1 - t;
-  const bezier = (a: number, b: number, c: number) => u * u * a + 2 * u * t * b + t * t * c;
-  const tangentX = 2 * u * (controlX - startX) + 2 * t * (targetX - controlX);
-  const tangentY = 2 * u * (controlY - startY) + 2 * t * (targetY - controlY);
-  const settle = u * u;
-  return {
-    x: bezier(startX, controlX, targetX),
-    y: bezier(startY, controlY, targetY),
-    z: bezier(startZ, controlZ, 0),
-    bank: Math.max(-0.9, Math.min(0.9, -tangentX * 0.05)) * settle,
-    pitch: Math.max(-0.6, Math.min(0.6, tangentY * 0.04)) * settle,
-    yaw: Math.max(-0.7, Math.min(0.7, tangentX * 0.04)) * settle,
-  };
-}
-
-function makeEnemy(model: Group): Group {
-  const enemy = new Group();
-  const alien = model.clone(true);
-  alien.traverse((object) => {
-    if (object instanceof Mesh) object.castShadow = true;
-  });
-  enemy.add(alien);
-  return enemy;
-}
-
-const BINARY_STREAM_LENGTH = 4;
-const BINARY_GLYPH_HEIGHT = 0.38;
-const BINARY_GLYPH_SPACING = 0.29;
-const BINARY_FLICKER_SECONDS = 0.07;
 const MUZZLE_FLASH_SECONDS = 0.18;
 const MUZZLE_LIGHT_INTENSITY = 18;
 const SMOKE_COLORS = ["#77808a", "#8a939c", "#9fa7ae", "#646d77"] as const;
@@ -732,169 +87,6 @@ interface ImpactLight {
   age: number;
   duration: number;
   peak: number;
-}
-
-function createBinaryGlyphTextures(): [CanvasTexture, CanvasTexture] {
-  return ["0", "1"].map((digit) => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 64;
-    canvas.height = 96;
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("Canvas 2D is unavailable.");
-    context.font = "bold 72px Consolas, 'Courier New', monospace";
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.shadowColor = "#16b9ff";
-    context.shadowBlur = 16;
-    context.fillStyle = "#70e4ff";
-    context.fillText(digit, 32, 50);
-    context.shadowBlur = 4;
-    context.fillStyle = "#e6fbff";
-    context.fillText(digit, 32, 50);
-    const texture = new CanvasTexture(canvas);
-    texture.colorSpace = SRGBColorSpace;
-    return texture;
-  }) as [CanvasTexture, CanvasTexture];
-}
-
-function makeBinaryStream(
-  glyphGeometry: PlaneGeometry,
-  textures: [CanvasTexture, CanvasTexture],
-  seed: number,
-): Group {
-  const stream = new Group();
-  const random = seededRandom(seed);
-  for (let index = 0; index < BINARY_STREAM_LENGTH; index += 1) {
-    const material = new MeshBasicMaterial({
-      map: textures[random() < 0.5 ? 0 : 1],
-      transparent: true,
-      opacity: 1 - index * 0.22,
-      blending: AdditiveBlending,
-      depthWrite: false,
-    });
-    const glyph = new Mesh(glyphGeometry, material);
-    const scale = 1 - index * 0.12;
-    glyph.scale.setScalar(scale);
-    glyph.position.y = -index * BINARY_GLYPH_SPACING;
-    stream.add(glyph);
-  }
-  return stream;
-}
-
-const MALWARE_CUBE_SIZE = 0.3;
-const HEX_TRAIL_LENGTH = 3;
-const HEX_GLYPH_WIDTH = 0.34;
-const HEX_GLYPH_HEIGHT = 0.24;
-const HEX_GLYPH_SPACING = 0.24;
-const HEX_GLYPHS = ["0x", "F3", "DE", "AD", "!!", "7F", "C0", "FF"] as const;
-
-interface MalwareFaceTextures {
-  map: CanvasTexture;
-  emissiveMap: CanvasTexture;
-}
-
-// Pixel-art cube face: a voxel-edged red panel with a warning triangle. The emissive map lights only
-// the triangle and edge pixels so the faces still pick up scene lighting.
-function createMalwareFaceTextures(): MalwareFaceTextures {
-  const size = 16;
-  const draw = (emissive: boolean): CanvasTexture => {
-    const canvas = document.createElement("canvas");
-    canvas.width = size;
-    canvas.height = size;
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("Canvas 2D is unavailable.");
-    context.fillStyle = emissive ? "#000000" : "#4a0c14";
-    context.fillRect(0, 0, size, size);
-    for (let index = 0; index < size; index += 1) {
-      const lit = index % 3 !== 1;
-      context.fillStyle = emissive ? (lit ? "#2a0608" : "#000000") : (lit ? "#9a2a34" : "#6e1620");
-      for (const [x, y] of [[index, 0], [index, size - 1], [0, index], [size - 1, index]] as const) {
-        context.fillRect(x, y, 1, 1);
-      }
-    }
-    // Warning triangle rows (row index, half-width), drawn as chunky pixels.
-    context.fillStyle = emissive ? "#6a3410" : "#c98a3e";
-    for (let row = 0; row < 10; row += 1) {
-      const half = Math.floor(row / 2);
-      context.fillRect(8 - half - 1, 3 + row, half * 2 + 2, 1);
-    }
-    context.fillStyle = emissive ? "#000000" : "#2a0406";
-    context.fillRect(7, 6, 2, 4);
-    context.fillRect(7, 11, 2, 1);
-    const texture = new CanvasTexture(canvas);
-    texture.colorSpace = SRGBColorSpace;
-    texture.magFilter = NearestFilter;
-    texture.minFilter = NearestFilter;
-    texture.generateMipmaps = false;
-    return texture;
-  };
-  return { map: draw(false), emissiveMap: draw(true) };
-}
-
-function createHexGlyphTextures(): CanvasTexture[] {
-  return HEX_GLYPHS.map((glyph) => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 96;
-    canvas.height = 64;
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("Canvas 2D is unavailable.");
-    context.font = "bold 46px Consolas, 'Courier New', monospace";
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.shadowColor = "#b8323a";
-    context.shadowBlur = 10;
-    context.fillStyle = "#c8505a";
-    context.fillText(glyph, 48, 34);
-    context.shadowBlur = 2;
-    context.fillStyle = "#e8a8a8";
-    context.fillText(glyph, 48, 34);
-    const texture = new CanvasTexture(canvas);
-    texture.colorSpace = SRGBColorSpace;
-    return texture;
-  });
-}
-
-function makeMalwareBomb(
-  cubeGeometry: BoxGeometry,
-  faceTextures: MalwareFaceTextures,
-  glyphGeometry: PlaneGeometry,
-  glyphTextures: CanvasTexture[],
-  seed: number,
-): Group {
-  const random = seededRandom(seed);
-  const bomb = new Group();
-  const cube = new Mesh(
-    cubeGeometry,
-    new MeshStandardMaterial({
-      color: "#ffffff",
-      map: faceTextures.map,
-      emissive: "#ffffff",
-      emissiveMap: faceTextures.emissiveMap,
-      emissiveIntensity: 0.8,
-      roughness: 0.55,
-      metalness: 0.15,
-    }),
-  );
-  cube.userData.spinAxis = new Vector3(random() - 0.5, random() - 0.5, random() - 0.5).normalize();
-  cube.userData.spinSpeed = 3 + random() * 2;
-  cube.userData.spinOffset = random() * Math.PI * 2;
-  bomb.add(cube);
-  for (let index = 0; index < HEX_TRAIL_LENGTH; index += 1) {
-    const glyph = new Mesh(
-      glyphGeometry,
-      new MeshBasicMaterial({
-        map: glyphTextures[Math.floor(random() * glyphTextures.length)],
-        transparent: true,
-        opacity: 0.65 - index * 0.18,
-        blending: AdditiveBlending,
-        depthWrite: false,
-      }),
-    );
-    glyph.scale.setScalar(1 - index * 0.14);
-    glyph.position.y = MALWARE_CUBE_SIZE * 0.7 + index * HEX_GLYPH_SPACING;
-    bomb.add(glyph);
-  }
-  return bomb;
 }
 
 export class GameScene {
@@ -918,10 +110,15 @@ export class GameScene {
   private readonly shieldDamageUniforms = new Map<number, Vector4[]>();
   private readonly shieldHoleWalls = new Map<number, InstancedMesh>();
   private readonly shieldHitShake = new Map<number, number>();
-  private readonly previousShieldHoleCounts = new Map<number, number>();
   private readonly enemyViews = new Map<number, Group>();
   private readonly enemyShadows = new Map<number, Mesh>();
   private readonly alienDeaths: AlienDeathAnimation[] = [];
+  private readonly mysteryView = makeMysteryShip();
+  private mysteryId = -1;
+  private mysteryAge = 0;
+  private readonly scorePopups: ScorePopup[] = [];
+  // 1 right after a march step, decaying to 0; drives the formation's step hop.
+  private marchPulse = 0;
   private playerDeath: PlayerDeathAnimation | undefined;
   private playerDeathComplete = false;
   private nextPlayerDeathFallsToward = false;
@@ -936,6 +133,9 @@ export class GameScene {
   private readonly malwareFaceTextures = createMalwareFaceTextures();
   private readonly hexGlyphGeometry = new PlaneGeometry(HEX_GLYPH_WIDTH, HEX_GLYPH_HEIGHT);
   private readonly hexGlyphTextures = createHexGlyphTextures();
+  private readonly wormSegmentGeometry = new SphereGeometry(1, 14, 10);
+  private readonly ransomwareCoreGeometry = new OctahedronGeometry(1, 0);
+  private readonly ransomwareRingGeometry = new TorusGeometry(0.3, 0.03, 8, 32);
   private readonly hitParticles: HitParticle[] = [];
   private readonly fragmentGeometry = new IcosahedronGeometry(1, 0);
   private readonly floorDecalGeometry = new PlaneGeometry(1, 1);
@@ -943,9 +143,8 @@ export class GameScene {
   private readonly loader = new GLTFLoader();
   private shipLoaded = false;
   private previousShipX = 0;
-  private previousLives = 3;
   private hitVibration = 0;
-  private previousPlayerFireCooldown = 0;
+  private playerDeathSeed = 0;
   private recoil = 0;
   private muzzleFlash = 0;
   private readonly muzzleFlareTexture = createMuzzleFlareTexture();
@@ -1009,6 +208,7 @@ export class GameScene {
     this.shadow = makeShipShadow();
     this.shadowTexture = (this.shadow.material as MeshBasicMaterial).map as CanvasTexture;
     this.scene.add(this.shadow, this.playerRoot);
+    this.scene.add(this.mysteryView.root);
     this.resize();
     window.addEventListener("resize", this.resize);
     window.addEventListener("pointerdown", this.handlePointerDown);
@@ -1136,7 +336,6 @@ export class GameScene {
           this.scene.add(group);
           this.shieldViews.set(id, group);
           this.shieldHitShake.set(id, 0);
-          this.previousShieldHoleCounts.set(id, 0);
 
           const uniforms = Array.from(
             { length: DAMAGE_HOLE_CAPACITY },
@@ -1223,6 +422,45 @@ export class GameScene {
     );
   }
 
+  /** Reacts to what the simulation reported since the last frame; call before update(). */
+  handleEvents(events: readonly GameEvent[]): void {
+    for (const event of events) {
+      switch (event.type) {
+        case "playerFired":
+          this.recoil = 0.22;
+          this.muzzleFlash = 1;
+          break;
+        case "playerHit":
+          this.hitVibration = 0.55;
+          break;
+        case "gameOver":
+          this.playerDeathSeed = event.seed;
+          break;
+        case "marchBeat":
+          this.marchPulse = 1;
+          break;
+        case "alienDestroyed":
+          this.destroyEnemyView(event.id);
+          break;
+        case "shieldHit":
+          this.shieldHitShake.set(event.shieldId, 0.32);
+          this.spawnShieldHitParticles(event);
+          break;
+        case "groundImpact":
+          this.spawnGroundSplat(event);
+          break;
+        case "mysteryDestroyed":
+          this.spawnMysteryDestruction(event);
+          break;
+        case "bombCancelled":
+          this.spawnBombCancel(event);
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
   update(state: GameState, deltaSeconds: number, elapsedSeconds: number): void {
     const delta = Math.min(deltaSeconds, 0.05);
     if (state.mode === "gameover" && !this.playerDeath && !this.playerDeathComplete) {
@@ -1259,7 +497,7 @@ export class GameScene {
         targetRotationZ,
         dustSpawned: false,
         smokeTimer: 0,
-        smokeSeed: (Math.random() * 0xffffffff) >>> 0,
+        smokeSeed: this.playerDeathSeed >>> 0,
       };
     }
     this.starMaterial.uniforms.uTime!.value = elapsedSeconds;
@@ -1269,8 +507,8 @@ export class GameScene {
       6 + Math.cos(elapsedSeconds * 0.31) * 1.5,
     );
     this.accentLight.intensity = 9.5 + Math.sin(elapsedSeconds * 0.7) * 1.5;
-    for (const hit of state.shieldHits.splice(0)) this.spawnShieldHitParticles(hit);
-    for (const impact of state.groundImpacts.splice(0)) this.spawnGroundSplat(impact);
+    this.updateMysteryShip(state, delta, elapsedSeconds);
+    this.updateScorePopups(delta);
     this.updateHitParticles(delta);
     this.updateAlienDeaths(delta);
 
@@ -1299,18 +537,9 @@ export class GameScene {
         ? shipDeltaX / delta
         : 0;
     this.previousShipX = state.shipX;
-    if (state.lives < this.previousLives) {
-      this.hitVibration = 0.55;
-    }
-    this.previousLives = state.lives;
 
     const turn = Math.max(-1, Math.min(1, shipVelocity / 8));
     const turnBlend = 1 - Math.exp(-12 * delta);
-    if (state.playerFireCooldown > this.previousPlayerFireCooldown) {
-      this.recoil = 0.22;
-      this.muzzleFlash = 1;
-    }
-    this.previousPlayerFireCooldown = state.playerFireCooldown;
     this.recoil *= Math.exp(-9 * delta);
     this.muzzleFlash = Math.max(0, this.muzzleFlash - delta / MUZZLE_FLASH_SECONDS);
     this.hitVibration = Math.max(0, this.hitVibration - delta);
@@ -1357,11 +586,6 @@ export class GameScene {
       const view = this.shieldViews.get(shield.id);
       if (view) this.updateShieldShadow(shield);
       if (view) {
-        const previousHoleCount = this.previousShieldHoleCounts.get(shield.id) ?? 0;
-        if (shield.damageHoles.length > previousHoleCount) {
-          this.shieldHitShake.set(shield.id, 0.32);
-        }
-        this.previousShieldHoleCounts.set(shield.id, shield.damageHoles.length);
 
         const hitShake = this.shieldHitShake.get(shield.id) ?? 0;
         const shakeEnvelope = hitShake / 0.32;
@@ -1384,20 +608,17 @@ export class GameScene {
 
     if (this.alienModels.length === ALIEN_VARIANT_COUNT) {
       const currentEnemyIds = new Set(state.enemies.map((enemy) => enemy.id));
-      for (const [id, view] of this.enemyViews) {
-        if (!currentEnemyIds.has(id)) {
-          this.alienDeaths.push({ view, age: 0 });
-          // The binary stream strikes the alien's underside; light it from just below and in front.
-          const impact = new Vector3(view.position.x, view.position.y - 0.3, 0.55);
-          this.flashImpactLight(impact, "#5fb4d8", ALIEN_HIT_LIGHT_INTENSITY, 0.26, 3.6);
-          this.spawnAlienHitFlare(new Vector3(impact.x, impact.y, 0.4));
-          this.enemyViews.delete(id);
-          this.removeEnemyShadow(id);
-        }
+      // Aliens cleared without a hit (an invasion resets the formation) still burst away.
+      for (const id of [...this.enemyViews.keys()]) {
+        if (!currentEnemyIds.has(id)) this.destroyEnemyView(id);
       }
       const introProgress = state.formationIntro > 0
         ? 1 - state.formationIntro / FORMATION_INTRO_SECONDS
         : 1;
+      this.marchPulse = Math.max(0, this.marchPulse - delta * 6);
+      const stepEase = this.marchPulse * this.marchPulse;
+      const stepHop = Math.sin(this.marchPulse * Math.PI) * 0.07;
+      const stepTilt = (state.marchBeat % 2 === 0 ? 1 : -1) * stepEase * 0.07;
       for (const enemy of state.enemies) {
         let view = this.enemyViews.get(enemy.id);
         if (!view) {
@@ -1422,12 +643,13 @@ export class GameScene {
         const phase = enemy.id * 0.83 + enemy.column * 1.37;
         view.position.set(
           x,
-          y + Math.sin(elapsedSeconds * 2 + phase) * 0.045,
+          y + Math.sin(elapsedSeconds * 2 + phase) * 0.045 + stepHop,
           (flight?.z ?? 0) + Math.cos(elapsedSeconds * 1.4 + phase) * 0.055,
         );
         view.rotation.x = Math.sin(elapsedSeconds * 1.4 + phase) * 0.045 + (flight?.pitch ?? 0);
         view.rotation.y = Math.cos(elapsedSeconds * 1.1 + phase) * 0.075 + (flight?.yaw ?? 0);
-        view.rotation.z = Math.sin(elapsedSeconds * 1.7 + phase) * 0.035 + (flight?.bank ?? 0);
+        view.rotation.z =
+          Math.sin(elapsedSeconds * 1.7 + phase) * 0.035 + (flight?.bank ?? 0) + stepTilt;
       }
     }
 
@@ -1447,6 +669,9 @@ export class GameScene {
     for (const death of this.alienDeaths) this.scene.remove(death.view);
     this.alienDeaths.length = 0;
     this.clearHitParticles();
+    this.mysteryView.root.visible = false;
+    this.mysteryId = -1;
+    this.clearScorePopups();
     this.playerDeath = undefined;
     this.playerDeathComplete = false;
     this.playerRoot.visible = this.shipLoaded;
@@ -1463,8 +688,6 @@ export class GameScene {
     this.syncPlayerShots([], 0);
     this.syncEnemyBombs([], 0);
     this.previousShipX = 0;
-    this.previousLives = 3;
-    this.previousPlayerFireCooldown = 0;
     this.hitVibration = 0;
     this.recoil = 0;
     this.muzzleFlash = 0;
@@ -1475,9 +698,6 @@ export class GameScene {
       impact.light.intensity = 0;
     }
     for (const shieldId of this.shieldHitShake.keys()) this.shieldHitShake.set(shieldId, 0);
-    for (const shieldId of this.previousShieldHoleCounts.keys()) {
-      this.previousShieldHoleCounts.set(shieldId, 0);
-    }
   }
 
   get isPlayerDeathComplete(): boolean {
@@ -1494,6 +714,8 @@ export class GameScene {
     window.removeEventListener("blur", this.resetParallaxTarget);
     this.resetForRestart();
     this.renderer.dispose();
+    for (const geometry of this.mysteryView.geometries) geometry.dispose();
+    for (const material of this.mysteryView.materials) material.dispose();
     this.fragmentGeometry.dispose();
     this.floorDecalGeometry.dispose();
     this.binaryGlyphGeometry.dispose();
@@ -1503,6 +725,9 @@ export class GameScene {
     this.malwareFaceTextures.emissiveMap.dispose();
     this.hexGlyphGeometry.dispose();
     for (const texture of this.hexGlyphTextures) texture.dispose();
+    this.wormSegmentGeometry.dispose();
+    this.ransomwareCoreGeometry.dispose();
+    this.ransomwareRingGeometry.dispose();
     this.dustTexture.dispose();
     this.muzzleFlareTexture.dispose();
     this.muzzleFlare.material.dispose();
@@ -1519,12 +744,105 @@ export class GameScene {
     }
   }
 
+  private destroyEnemyView(id: number): void {
+    const view = this.enemyViews.get(id);
+    if (!view) return;
+    this.alienDeaths.push({ view, age: 0 });
+    // The binary stream strikes the alien's underside; light it from just below and in front.
+    const impact = new Vector3(view.position.x, view.position.y - 0.3, 0.55);
+    this.flashImpactLight(impact, "#5fb4d8", ALIEN_HIT_LIGHT_INTENSITY, 0.26, 3.6);
+    this.spawnAlienHitFlare(new Vector3(impact.x, impact.y, 0.4));
+    this.enemyViews.delete(id);
+    this.removeEnemyShadow(id);
+  }
+
   private clearHitParticles(): void {
     for (const particle of this.hitParticles) {
       this.scene.remove(particle.object);
       particle.object.material.dispose();
     }
     this.hitParticles.length = 0;
+  }
+
+  private updateMysteryShip(state: GameState, delta: number, elapsedSeconds: number): void {
+    const ship = state.mystery;
+    const view = this.mysteryView;
+    if (!ship) {
+      view.root.visible = false;
+      this.mysteryId = -1;
+      return;
+    }
+    if (ship.id !== this.mysteryId) {
+      this.mysteryId = ship.id;
+      this.mysteryAge = 0;
+    }
+    this.mysteryAge += delta;
+    // Warp in on arrival and shrink away as it reaches the far edge.
+    const arrive = Math.min(1, this.mysteryAge / 0.45);
+    const edge = Math.max(0, Math.min(1, (MYSTERY_EDGE - Math.abs(ship.x)) / 0.9));
+    const reach = ship.x * ship.direction > 0 ? edge : 1;
+    const presence = Math.min(arrive, reach);
+    const eased = presence * presence * (3 - 2 * presence);
+    view.root.visible = eased > 0.01;
+    view.root.scale.set(eased, eased, eased);
+    view.root.position.set(ship.x, MYSTERY_Y + Math.sin(elapsedSeconds * 2.6) * 0.08, 0.2);
+    view.root.rotation.set(0.42, 0, -ship.direction * 0.12 + Math.sin(elapsedSeconds * 1.9) * 0.04);
+    view.spinner.rotation.y += delta * 2.4 * ship.direction;
+    const chase = elapsedSeconds * 9;
+    view.beacons.forEach((material, index) => {
+      const phase = (chase - index + MYSTERY_BEACON_COUNT * 100) % MYSTERY_BEACON_COUNT;
+      material.emissiveIntensity = phase < 1 ? 1.6 : 0.2;
+    });
+  }
+
+  private spawnMysteryDestruction(hit: MysteryHit): void {
+    const center = new Vector3(hit.x, hit.y, 0.3);
+    this.mysteryView.root.visible = false;
+    this.mysteryId = -1;
+    this.spawnAlienHitFlare(center);
+    this.spawnAlienBurst(center, hit.seed);
+    this.spawnAlienBurst(center, hit.seed ^ 0x3c6ef372);
+    this.flashImpactLight(new Vector3(hit.x, hit.y, 1), "#d9a35f", ALIEN_BURST_LIGHT_INTENSITY * 1.3, 0.55, 7);
+
+    const material = new SpriteMaterial({
+      map: createScorePopupTexture(`+${hit.points}`),
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+    });
+    const sprite = new Sprite(material);
+    sprite.scale.set(1.6, 0.6, 1);
+    sprite.position.copy(center);
+    sprite.renderOrder = 4;
+    this.scene.add(sprite);
+    this.scorePopups.push({ sprite, age: 0, startY: hit.y });
+  }
+
+  private updateScorePopups(delta: number): void {
+    for (let index = this.scorePopups.length - 1; index >= 0; index -= 1) {
+      const popup = this.scorePopups[index]!;
+      popup.age += delta;
+      const progress = popup.age / SCORE_POPUP_LIFETIME;
+      if (progress >= 1) {
+        this.removeScorePopup(popup);
+        this.scorePopups.splice(index, 1);
+        continue;
+      }
+      const rise = 1 - (1 - progress) * (1 - progress);
+      popup.sprite.position.y = popup.startY + rise * 0.7;
+      popup.sprite.material.opacity = progress < 0.55 ? 1 : 1 - (progress - 0.55) / 0.45;
+    }
+  }
+
+  private removeScorePopup(popup: ScorePopup): void {
+    this.scene.remove(popup.sprite);
+    popup.sprite.material.map?.dispose();
+    popup.sprite.material.dispose();
+  }
+
+  private clearScorePopups(): void {
+    for (const popup of this.scorePopups) this.removeScorePopup(popup);
+    this.scorePopups.length = 0;
   }
 
   private updatePlayerDeath(delta: number): void {
@@ -1714,9 +1032,9 @@ export class GameScene {
   }
 
   private applyCameraOffset(x: number, y: number): void {
-    // Shift the eye toward the mouse while still looking at the play field centre,
-    // so near objects slide against the far sky and stars.
-    this.camera.position.set(x * PARALLAX_X, CAMERA_HEIGHT + y * PARALLAX_Y, CAMERA_DISTANCE);
+    // Move the eye away from the mouse while still looking at the play field centre,
+    // so the scene tilts toward the cursor and near objects slide against the far sky.
+    this.camera.position.set(-x * PARALLAX_X, CAMERA_HEIGHT - y * PARALLAX_Y, CAMERA_DISTANCE);
     this.camera.lookAt(0, 0, 0);
     // The sky gradient is effectively at infinity, so it stays locked to the view.
     this.camera.updateMatrixWorld();
@@ -1851,19 +1169,33 @@ export class GameScene {
     }
     const flickerStep = Math.floor(elapsedSeconds / BINARY_FLICKER_SECONDS);
     for (const projectile of projectiles) {
+      const kind = projectile.kind ?? "malware";
       let view = this.enemyShotViews.get(projectile.id);
       if (!view) {
-        view = makeMalwareBomb(
-          this.malwareCubeGeometry,
-          this.malwareFaceTextures,
-          this.hexGlyphGeometry,
-          this.hexGlyphTextures,
-          projectile.id * 7919 + 31,
-        );
+        view =
+          kind === "worm"
+            ? makeWormBomb(this.wormSegmentGeometry)
+            : kind === "ransomware"
+              ? makeRansomwareBomb(this.ransomwareCoreGeometry, this.ransomwareRingGeometry)
+              : makeMalwareBomb(
+                  this.malwareCubeGeometry,
+                  this.malwareFaceTextures,
+                  this.hexGlyphGeometry,
+                  this.hexGlyphTextures,
+                  projectile.id * 7919 + 31,
+                );
         this.enemyShotViews.set(projectile.id, view);
         this.scene.add(view);
       }
       view.position.set(projectile.x, projectile.y, BOMB_DEPTH);
+      if (kind === "worm") {
+        this.updateWormBomb(view, projectile);
+        continue;
+      }
+      if (kind === "ransomware") {
+        this.updateRansomwareBomb(view, projectile, elapsedSeconds);
+        continue;
+      }
       const [cube, ...glyphs] = view.children as Mesh[];
       if (!cube) continue;
       const { spinAxis, spinSpeed, spinOffset } = cube.userData as {
@@ -1886,6 +1218,83 @@ export class GameScene {
         material.opacity = (roll > 0.94 ? 0.8 : 0.65) - index * 0.18;
       });
     }
+  }
+
+  private updateWormBomb(view: Group, projectile: Projectile): void {
+    const age = projectile.age ?? 0;
+    const originX = projectile.originX ?? projectile.x;
+    view.children.forEach((segment, index) => {
+      // Each segment retraces where the head was a moment ago, so the body snakes behind it.
+      const lagged = Math.max(0, age - index * WORM_SEGMENT_LAG);
+      segment.position.x = originX + Math.sin(lagged * WORM_FREQUENCY) * WORM_AMPLITUDE - projectile.x;
+      segment.position.y = index * WORM_SEGMENT_SPACING;
+      segment.position.z = Math.sin(age * 9 - index * 0.8) * 0.04;
+    });
+  }
+
+  private updateRansomwareBomb(view: Group, projectile: Projectile, elapsedSeconds: number): void {
+    const [core, ...rings] = view.children as Mesh[];
+    if (!core) return;
+    const cracked = (projectile.hp ?? 2) < 2;
+    core.rotation.y = elapsedSeconds * 2.4 + projectile.id;
+    const coreMaterial = core.material as MeshStandardMaterial;
+    coreMaterial.emissiveIntensity = 0.55 + Math.sin(elapsedSeconds * 6 + projectile.id) * 0.15;
+    rings.forEach((ring, index) => {
+      ring.rotation.x = elapsedSeconds * (index === 0 ? 1.6 : -1.9);
+      const material = ring.material as MeshStandardMaterial;
+      if (cracked) {
+        // A cracked lock loses a ring's worth of glow and flickers like it is failing.
+        material.color.set("#9c5a50");
+        material.emissive.set("#6a2a24");
+        material.emissiveIntensity = 0.4 + (Math.sin(elapsedSeconds * 23 + index) > 0.3 ? 0.4 : 0);
+        ring.scale.setScalar(index === 0 ? 1 : 0.82);
+      }
+    });
+  }
+
+  private spawnBombCancel(cancel: BombCancel): void {
+    const random = seededRandom(cancel.seed);
+    const palette = BOMB_CANCEL_COLORS[cancel.kind];
+    const center = new Vector3(cancel.x, cancel.y, BOMB_DEPTH + 0.1);
+    const sparkCount = cancel.destroyed ? 10 + Math.floor(random() * 5) : 5;
+    for (let index = 0; index < sparkCount; index += 1) {
+      const color = palette.spark[Math.floor(random() * palette.spark.length)]!;
+      const spark = new Mesh(
+        this.fragmentGeometry,
+        new MeshStandardMaterial({
+          color,
+          emissive: color,
+          emissiveIntensity: 0.6,
+          roughness: 0.4,
+          transparent: true,
+          depthWrite: false,
+        }),
+      );
+      const size = 0.03 + random() * 0.04;
+      spark.scale.setScalar(size);
+      spark.position.copy(center);
+      this.scene.add(spark);
+      const angle = random() * Math.PI * 2;
+      const speed = (cancel.destroyed ? 1.6 : 1.1) + random() * 2;
+      this.hitParticles.push({
+        object: spark,
+        velocity: new Vector3(Math.cos(angle) * speed, Math.sin(angle) * speed, (random() - 0.5) * 1.4),
+        angularVelocity: new Vector3((random() - 0.5) * 20, (random() - 0.5) * 20, (random() - 0.5) * 20),
+        age: 0,
+        lifetime: 0.3 + random() * 0.3,
+        gravity: 1.4,
+        initialScale: size,
+        kind: "spark",
+      });
+    }
+    if (cancel.destroyed) this.spawnAlienHitFlare(center);
+    this.flashImpactLight(
+      new Vector3(cancel.x, cancel.y, 0.8),
+      palette.light,
+      ALIEN_HIT_LIGHT_INTENSITY * (cancel.destroyed ? 0.9 : 0.5),
+      cancel.destroyed ? 0.28 : 0.18,
+      3.2,
+    );
   }
 
   private spawnShieldHitParticles(hit: ShieldHit): void {

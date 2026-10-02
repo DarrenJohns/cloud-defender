@@ -1,17 +1,32 @@
 import { describe, expect, it } from "vitest";
 import {
+  BOMB_CANCEL_POINTS,
+  chooseBombKind,
+  comboMultiplier,
   createGameState as createNewGame,
   damageShieldAt,
   erodeShieldsUnderEnemies,
+  EXTRA_SHIELD_SCORE,
   FAST_FORWARD_ENEMY_MULTIPLIER,
   FORMATION_INTRO_SECONDS,
+  frontLineShooters,
   GROUND_Y,
   isShieldDamagedAt,
+  MARCH_STEP_DISTANCE,
+  MAX_COMBO_MULTIPLIER,
+  MAX_PLAYER_SHOTS,
+  MYSTERY_EDGE,
+  MYSTERY_Y,
   PLAYER_LIMIT,
   PLAYER_Y,
+  rowPoints,
+  shotAccuracy,
   updateAftermath,
   updateGame,
+  waveAccuracyBonus,
+  waveStartDrop,
 } from "./gameLogic";
+import type { GameEventOf, GameEventType, GameState } from "./gameLogic";
 
 const idle = { left: false, right: false, fire: false };
 
@@ -19,7 +34,15 @@ const idle = { left: false, right: false, fire: false };
 function createGameState(seed?: number): ReturnType<typeof createNewGame> {
   const state = createNewGame(seed);
   state.formationIntro = 0;
+  state.events.length = 0;
   return state;
+}
+
+/** Payloads of the queued events of one type, without the discriminator. */
+function eventsOf<T extends GameEventType>(state: GameState, type: T): Omit<GameEventOf<T>, "type">[] {
+  return state.events
+    .filter((event): event is GameEventOf<T> => event.type === type)
+    .map(({ type: _type, ...payload }) => payload);
 }
 
 describe("game simulation", () => {
@@ -70,7 +93,10 @@ describe("game simulation", () => {
 
     updateGame(state, { ...idle, fire: true }, 0.05);
 
-    expect(state.score).toBe(10);
+    // 30 for the alien plus the perfect-accuracy wave bonus.
+    expect(state.score).toBe(30 + 200);
+    expect(eventsOf(state, "waveCleared")).toEqual([{ level: 1, hits: 1, shots: 1, accuracy: 1, bonus: 200 }]);
+    expect(state.kills).toBe(1);
     expect(state.level).toBe(2);
     expect(state.enemies).toHaveLength(18);
     expect(state.enemies.slice(0, 6).every((enemy) => enemy.modelIndex === 3)).toBe(true);
@@ -100,6 +126,136 @@ describe("game simulation", () => {
     expect(modelIndices.size).toBe(10);
     expect(shield.damageHoles).toHaveLength(damagedHoleCount);
     expect(state.enemySpeed).toBeGreaterThan(1.15);
+  });
+
+  it("allows only one player shot in flight at a time", () => {
+    const state = createGameState();
+    state.enemies = [{ ...state.enemies[0]!, x: -7, y: 4 }];
+    state.enemyFireCooldown = 10;
+
+    updateGame(state, { ...idle, fire: true }, 0.05);
+    expect(state.playerShots).toHaveLength(MAX_PLAYER_SHOTS);
+    for (let step = 0; step < 8; step += 1) updateGame(state, { ...idle, fire: true }, 0.05);
+    expect(state.playerShots).toHaveLength(MAX_PLAYER_SHOTS);
+  });
+
+  it("only fires bombs from the lowest alien in each column", () => {
+    const state = createGameState();
+    const shooters = frontLineShooters(state.enemies);
+    expect(shooters).toHaveLength(6);
+    expect(shooters.every((enemy) => enemy.row === 2)).toBe(true);
+
+    for (let pick = 0; pick < 6; pick += 1) {
+      const trial = createGameState();
+      trial.enemyFireCooldown = 0;
+      updateGame(trial, idle, 0.001, () => pick / 6);
+      const lowestY = Math.min(...trial.enemies.map((enemy) => enemy.y));
+      expect(trial.enemyShots[0]!.y).toBeCloseTo(lowestY - 0.45);
+    }
+
+    // Once a column's bottom alien is gone, the one above takes over.
+    state.enemies = state.enemies.filter((enemy) => !(enemy.column === 0 && enemy.row === 2));
+    const column0 = frontLineShooters(state.enemies).find((enemy) => enemy.column === 0);
+    expect(column0?.row).toBe(1);
+  });
+
+  it("scores more for higher rows", () => {
+    expect(rowPoints(0)).toBe(30);
+    expect(rowPoints(1)).toBe(20);
+    expect(rowPoints(2)).toBe(10);
+  });
+
+  it("starts later waves lower and cycles back to the top", () => {
+    expect(waveStartDrop(1)).toBe(0);
+    expect(waveStartDrop(3)).toBeGreaterThan(waveStartDrop(2));
+    expect(waveStartDrop(7)).toBe(0);
+
+    const state = createGameState();
+    const firstTop = Math.max(...state.enemies.map((enemy) => enemy.y));
+    state.enemies = [];
+    updateGame(state, idle, 0.016);
+    const secondTop = Math.max(...state.enemies.map((enemy) => enemy.y));
+    expect(secondTop).toBeLessThan(firstTop);
+  });
+
+  it("advances the march beat as the formation steps and drops", () => {
+    const state = createGameState();
+    state.enemyFireCooldown = 10;
+    const distancePerUpdate = state.enemySpeed * 0.05;
+    const updates = Math.ceil(MARCH_STEP_DISTANCE / distancePerUpdate);
+    for (let step = 0; step < updates; step += 1) updateGame(state, idle, 0.05);
+    expect(state.marchBeat).toBe(1);
+
+    state.enemies = [{ ...state.enemies[0]!, x: 6.6, y: 2 }];
+    updateGame(state, idle, 0.05);
+    expect(state.marchBeat).toBe(2);
+  });
+
+  it("sends a mystery ship across the top once its timer runs out", () => {
+    const state = createGameState();
+    state.enemyFireCooldown = 100;
+    state.mysteryTimer = 0.01;
+    updateGame(state, idle, 0.05, () => 0.9);
+    expect(state.mystery).toMatchObject({ x: MYSTERY_EDGE, direction: -1, points: 300 });
+
+    for (let step = 0; step < 200 && state.mystery; step += 1) {
+      state.enemyFireCooldown = 100;
+      updateGame(state, idle, 0.05, () => 0.9);
+    }
+    expect(state.mystery).toBeNull();
+    expect(state.mysteryTimer).toBeGreaterThan(0);
+  });
+
+  it("awards bonus points for shooting the mystery ship", () => {
+    const state = createGameState();
+    state.enemyFireCooldown = 100;
+    updateGame(state, { ...idle, fire: true }, 0.01);
+    const shot = state.playerShots[0]!;
+    shot.y = MYSTERY_Y - 0.6;
+    state.mystery = { id: 999, x: shot.x, direction: 1, points: 150 };
+    const scoreBefore = state.score;
+    const killsBefore = state.kills;
+
+    updateGame(state, idle, 0.05);
+    expect(state.mystery).toBeNull();
+    expect(state.score).toBe(scoreBefore + 150);
+    expect(state.kills).toBe(killsBefore);
+    expect(state.playerShots).toHaveLength(0);
+    expect(eventsOf(state, "mysteryDestroyed")).toEqual([expect.objectContaining({ points: 150, y: MYSTERY_Y })]);
+  });
+
+  it("holds the mystery ship back when only a few aliens remain", () => {
+    const state = createGameState();
+    state.enemies = state.enemies.slice(0, 3);
+    state.enemyFireCooldown = 100;
+    state.mysteryTimer = 0.01;
+    updateGame(state, idle, 0.05);
+    expect(state.mystery).toBeNull();
+  });
+
+  it("grants one extra shield the first time the score reaches the bonus threshold", () => {
+    const state = createGameState();
+    state.enemyFireCooldown = 100;
+    state.score = EXTRA_SHIELD_SCORE - 1;
+    updateGame(state, idle, 0.016);
+    expect(state.lives).toBe(3);
+
+    state.score = EXTRA_SHIELD_SCORE;
+    updateGame(state, idle, 0.016);
+    expect(state.lives).toBe(4);
+
+    state.score = EXTRA_SHIELD_SCORE * 3;
+    updateGame(state, idle, 0.016);
+    expect(state.lives).toBe(4);
+    expect(createNewGame().extraShieldAwarded).toBe(false);
+  });
+
+  it("clears the mystery ship when the wave is cleared", () => {
+    const state = createGameState();
+    state.mystery = { id: 999, x: 0, direction: 1, points: 50 };
+    state.enemies = [];
+    updateGame(state, idle, 0.016);
+    expect(state.mystery).toBeNull();
   });
 
   it("increases enemy firing rate on later waves", () => {
@@ -166,8 +322,8 @@ describe("game simulation", () => {
     updateGame(state, idle, 0.05);
     expect(state.playerShots).toHaveLength(0);
     expect(shield.damageHoles.length).toBeGreaterThan(0);
-    expect(state.shieldHits).toHaveLength(1);
-    expect(state.shieldHits[0]).toMatchObject({ shieldId: shield.id, x: shield.x });
+    expect(eventsOf(state, "shieldHit")).toHaveLength(1);
+    expect(eventsOf(state, "shieldHit")[0]).toMatchObject({ shieldId: shield.id, x: shield.x });
 
     state.playerShots = [
       {
@@ -231,7 +387,7 @@ describe("game simulation", () => {
 
     expect(state.enemyShots).toHaveLength(0);
     expect(shield.damageHoles.length).toBeGreaterThan(0);
-    expect(state.shieldHits).toHaveLength(1);
+    expect(eventsOf(state, "shieldHit")).toHaveLength(1);
   });
 
   it("lets aliens chew through the firewall they overlap", () => {
@@ -244,7 +400,7 @@ describe("game simulation", () => {
     expect(isShieldDamagedAt(shield, shield.x, shield.y)).toBe(true);
     expect(shield.damageHoles.length).toBeGreaterThan(0);
     expect(shield.damageHoles.length).toBeLessThanOrEqual(64);
-    expect(state.shieldHits.length).toBe(shield.damageHoles.length);
+    expect(eventsOf(state, "shieldHit").length).toBe(shield.damageHoles.length);
     for (const other of state.shields.filter((candidate) => candidate !== shield)) {
       expect(other.damageHoles).toHaveLength(0);
     }
@@ -276,8 +432,8 @@ describe("game simulation", () => {
     updateGame(state, idle, 0.05);
 
     expect(state.enemyShots).toHaveLength(0);
-    expect(state.groundImpacts).toHaveLength(1);
-    expect(state.groundImpacts[0]!.x).toBeCloseTo(2);
+    expect(eventsOf(state, "groundImpact")).toHaveLength(1);
+    expect(eventsOf(state, "groundImpact")[0]!.x).toBeCloseTo(2);
     expect(state.lives).toBe(3);
   });
 
@@ -294,7 +450,7 @@ describe("game simulation", () => {
 
     expect(state.playerShots).toHaveLength(0);
     expect(state.enemyShots).toHaveLength(0);
-    expect(state.groundImpacts).toHaveLength(1);
+    expect(eventsOf(state, "groundImpact")).toHaveLength(1);
     expect(state.enemies).toHaveLength(enemyCount);
     expect(state.score).toBe(score);
   });
@@ -307,6 +463,166 @@ describe("game simulation", () => {
 
     expect(restarted.level).toBe(1);
     expect(restarted.shields.every((shield) => shield.damageHoles.length === 0)).toBe(true);
-    expect(restarted.damageRandomState).not.toBe(state.damageRandomState);
+    expect(restarted.randomState).not.toBe(state.randomState);
+  });
+
+  function openSkies(seed = 3): ReturnType<typeof createGameState> {
+    const state = createGameState(seed);
+    // A single distant alien keeps the wave alive without getting in the way.
+    state.enemies = [{ ...state.enemies[0]!, x: -6.5, y: 4 }];
+    state.enemyFireCooldown = 10;
+    state.mysteryTimer = 100;
+    return state;
+  }
+
+  it("mixes in worm and ransomware bombs on later waves", () => {
+    expect(chooseBombKind(1, 0)).toBe("malware");
+    expect(chooseBombKind(2, 0.1)).toBe("worm");
+    expect(chooseBombKind(2, 0.5)).toBe("malware");
+    expect(chooseBombKind(3, 0.1)).toBe("ransomware");
+    expect(chooseBombKind(3, 0.3)).toBe("worm");
+  });
+
+  it("weaves worm bombs around their column as they fall", () => {
+    const state = openSkies();
+    state.enemyShots = [{ id: 50, x: 0, y: 2, kind: "worm", originX: 0, age: 0, hp: 1 }];
+    const xs: number[] = [];
+    for (let step = 0; step < 20; step += 1) {
+      updateGame(state, idle, 0.05);
+      xs.push(state.enemyShots[0]!.x);
+    }
+    expect(Math.max(...xs)).toBeGreaterThan(0.2);
+    expect(Math.min(...xs)).toBeLessThan(-0.2);
+    expect(xs.every((x) => Math.abs(x) <= 0.46)).toBe(true);
+    expect(state.enemyShots[0]!.y).toBeCloseTo(2 - 4.4);
+  });
+
+  it("lets a player shot knock a bomb out of the sky", () => {
+    const state = openSkies();
+    state.playerShots = [{ id: 60, x: 0, y: -1.6 }];
+    state.enemyShots = [{ id: 61, x: 0.1, y: -1, kind: "malware", hp: 1 }];
+
+    updateGame(state, idle, 0.05);
+
+    expect(state.playerShots).toHaveLength(0);
+    expect(state.enemyShots).toHaveLength(0);
+    expect(state.score).toBe(BOMB_CANCEL_POINTS);
+    expect(eventsOf(state, "bombCancelled")).toHaveLength(1);
+    expect(eventsOf(state, "bombCancelled")[0]).toMatchObject({ kind: "malware", destroyed: true });
+    expect(state.shotsMissed).toBe(0);
+  });
+
+  it("needs two shots to break an armoured ransomware bomb", () => {
+    const state = openSkies();
+    state.playerShots = [{ id: 70, x: 0, y: -1.6 }];
+    state.enemyShots = [{ id: 71, x: 0, y: -1, kind: "ransomware", hp: 2 }];
+
+    updateGame(state, idle, 0.05);
+    expect(state.playerShots).toHaveLength(0);
+    expect(state.enemyShots).toHaveLength(1);
+    expect(eventsOf(state, "bombCancelled")[0]).toMatchObject({ kind: "ransomware", destroyed: false });
+    expect(state.score).toBe(0);
+
+    const bomb = state.enemyShots[0]!;
+    state.playerShots = [{ id: 72, x: bomb.x, y: bomb.y - 0.6 }];
+    updateGame(state, idle, 0.05);
+    expect(state.enemyShots).toHaveLength(0);
+    expect(eventsOf(state, "bombCancelled")[1]).toMatchObject({ destroyed: true });
+    expect(state.score).toBe(BOMB_CANCEL_POINTS);
+  });
+
+  it("multiplies alien points by the hit streak and resets it on a miss", () => {
+    expect(comboMultiplier(0)).toBe(1);
+    expect(comboMultiplier(4)).toBe(1);
+    expect(comboMultiplier(5)).toBe(2);
+    expect(comboMultiplier(10)).toBe(3);
+    expect(comboMultiplier(99)).toBe(MAX_COMBO_MULTIPLIER);
+
+    const state = openSkies();
+    const target = { ...state.enemies[0]!, id: 900, row: 0, x: 0, y: -1 };
+    state.enemies.push(target);
+    state.combo = 4;
+    state.playerShots = [{ id: 80, x: 0, y: -1.3 }];
+
+    updateGame(state, idle, 0.05);
+    expect(state.combo).toBe(5);
+    expect(state.bestCombo).toBe(5);
+    expect(state.score).toBe(rowPoints(0) * 2);
+
+    state.playerShots = [{ id: 81, x: 0, y: 7.9 }];
+    updateGame(state, idle, 0.05);
+    expect(state.combo).toBe(0);
+    expect(state.bestCombo).toBe(5);
+    expect(state.shotsMissed).toBe(1);
+  });
+
+  it("scales the wave-secured bonus with accuracy", () => {
+    expect(waveAccuracyBonus(1)).toBe(200);
+    expect(waveAccuracyBonus(0.5)).toBe(100);
+    expect(waveAccuracyBonus(0)).toBe(0);
+    expect(shotAccuracy(3, 1)).toBe(0.75);
+    expect(shotAccuracy(0, 0)).toBe(0);
+
+    const state = openSkies();
+    state.enemies = [];
+    state.waveHits = 3;
+    state.waveMisses = 1;
+    updateGame(state, idle, 0.016);
+
+    expect(eventsOf(state, "waveCleared")).toEqual([{ level: 1, hits: 3, shots: 4, accuracy: 0.75, bonus: 150 }]);
+    expect(state.score).toBe(150);
+    expect(state.waveHits).toBe(0);
+    expect(state.waveMisses).toBe(0);
+  });
+
+  it("replays the same run from the same seed and inputs", () => {
+    const play = (seed: number) => {
+      const state = createNewGame(seed);
+      for (let step = 0; step < 240 * 20; step += 1) {
+        const phase = Math.floor(step / 300) % 3;
+        updateGame(state, { left: phase === 0, right: phase === 2, fire: step % 40 === 0 }, 1 / 240);
+        state.events.length = 0;
+      }
+      return state;
+    };
+    const first = play(42);
+    const second = play(42);
+    const other = play(43);
+
+    expect(second).toEqual(first);
+    expect(first.enemyShots.length + first.nextProjectileId).toBeGreaterThan(0);
+    expect(other.randomState).not.toBe(first.randomState);
+  });
+
+  it("announces the opening fly-in and reports combat as events", () => {
+    expect(createNewGame(1).events).toEqual([{ type: "formationIncoming", level: 1 }]);
+
+    const state = openSkies();
+    state.enemies[0]!.x = 0;
+    state.enemies[0]!.y = -2;
+    updateGame(state, { ...idle, fire: true }, 0.05);
+    for (let step = 0; step < 5; step += 1) updateGame(state, idle, 0.05);
+
+    const types = state.events.map((event) => event.type);
+    expect(types).toEqual(["playerFired", "alienDestroyed", "waveCleared", "formationIncoming"]);
+    expect(eventsOf(state, "alienDestroyed")[0]).toMatchObject({ row: 0, points: rowPoints(0) });
+  });
+
+  it("raises events for streak steps, lost shields and game over", () => {
+    const state = openSkies();
+    state.combo = 4;
+    state.enemies[0]!.x = 0;
+    state.enemies[0]!.y = -2;
+    state.enemies.push({ ...state.enemies[0]!, id: 99, x: 6.5, y: 4 });
+    updateGame(state, { ...idle, fire: true }, 0.05);
+    for (let step = 0; step < 5; step += 1) updateGame(state, idle, 0.05);
+    expect(eventsOf(state, "comboUp")).toEqual([{ multiplier: 2 }]);
+
+    state.events.length = 0;
+    state.lives = 1;
+    state.enemyShots = [{ id: 500, x: state.shipX, y: PLAYER_Y }];
+    updateGame(state, idle, 0.016);
+    expect(state.events.map((event) => event.type)).toEqual(["playerHit", "gameOver"]);
+    expect(state.mode).toBe("gameover");
   });
 });

@@ -1,15 +1,5 @@
-const FULL_WAVE_SIZE = 18;
-const BASE_ENEMY_SPEED = 1.15;
 const MARCH_NOTES = [55, 49, 46.25, 41.2];
 const MASTER_VOLUME = 0.32;
-
-/** Seconds between march-bass notes: slower for a full, slow wave, faster as aliens thin out and speed up. */
-export function marchInterval(enemyCount: number, enemySpeed: number): number {
-  const remaining = Math.max(0, Math.min(1, enemyCount / FULL_WAVE_SIZE));
-  const speedFactor = Math.pow(BASE_ENEMY_SPEED / Math.max(0.1, enemySpeed), 0.6);
-  const interval = 0.62 * speedFactor * (0.3 + 0.7 * remaining);
-  return Math.max(0.11, Math.min(0.75, interval));
-}
 
 type AudioContextConstructor = typeof AudioContext;
 
@@ -21,7 +11,7 @@ export class GameAudio {
   private muted: boolean;
   private paused = false;
   private marchStep = 0;
-  private marchTimer = 0;
+  private humNodes: { oscillator: OscillatorNode; wobble: OscillatorNode; envelope: GainNode } | null = null;
   private readonly lastPlayed = new Map<string, number>();
 
   constructor(muted = false) {
@@ -67,16 +57,13 @@ export class GameAudio {
 
   resetMarch(): void {
     this.marchStep = 0;
-    this.marchTimer = 0;
   }
 
-  /** Advances the four-note invader march; call every frame while the wave is advancing. */
-  updateMarch(deltaSeconds: number, enemyCount: number, enemySpeed: number): void {
-    this.marchTimer -= deltaSeconds;
-    if (this.marchTimer > 0) return;
-    this.marchTimer = marchInterval(enemyCount, enemySpeed);
+  /** Plays the next note of the four-note invader march; call once per formation step. */
+  marchNote(): void {
     const frequency = MARCH_NOTES[this.marchStep % MARCH_NOTES.length]!;
     this.marchStep += 1;
+    if (!this.throttle("march", 0.07)) return;
     this.tone({ type: "square", from: frequency, to: frequency * 0.97, duration: 0.11, volume: 0.22, lowpass: 420 });
   }
 
@@ -121,15 +108,95 @@ export class GameAudio {
     this.tone({ type: "sawtooth", from: 55, to: 41, duration: 2.2, volume: 0.1, delay: 0.3, lowpass: 260 });
   }
 
-  waveCleared(): void {
-    const notes = [392, 523.3, 659.3, 784];
-    notes.forEach((frequency, index) => {
-      this.tone({ type: "square", from: frequency, to: frequency, duration: 0.13, volume: 0.07, delay: index * 0.09, lowpass: 2600 });
-    });
-  }
-
   formationFlyIn(): void {
     this.noise({ duration: 1.6, volume: 0.07, filter: "bandpass", from: 300, to: 2200, q: 3, attack: 0.9 });
+  }
+
+  /** A shot meeting a bomb: a crisp zap, or a metallic clank when armour only cracks. */
+  bombCancelled(destroyed: boolean): void {
+    if (!this.throttle("bombCancel", 0.04)) return;
+    if (destroyed) {
+      this.tone({ type: "square", from: 1500, to: 300, duration: 0.11, volume: 0.07, lowpass: 3600 });
+      this.noise({ duration: 0.12, volume: 0.1, filter: "highpass", from: 3000, to: 1200, q: 0.8 });
+    } else {
+      this.tone({ type: "triangle", from: 1900, to: 1700, duration: 0.16, volume: 0.08 });
+      this.tone({ type: "square", from: 240, to: 180, duration: 0.08, volume: 0.06, lowpass: 1200 });
+    }
+  }
+
+  /** Rising blip each time the hit streak earns a higher multiplier. */
+  comboUp(multiplier: number): void {
+    const base = 440 * 2 ** ((multiplier - 2) * 4 / 12);
+    this.tone({ type: "triangle", from: base, to: base, duration: 0.07, volume: 0.07, lowpass: 3000 });
+    this.tone({ type: "triangle", from: base * 1.5, to: base * 1.5, duration: 0.12, volume: 0.07, delay: 0.07, lowpass: 3000 });
+  }
+
+  /** A short major fanfare with a held fifth under the "wave secured" banner. */
+  waveSecured(): void {
+    const notes = [523.3, 659.3, 784, 1046.5];
+    notes.forEach((frequency, index) => {
+      this.tone({ type: "triangle", from: frequency, to: frequency, duration: 0.16, volume: 0.07, delay: 0.35 + index * 0.1, lowpass: 2800 });
+    });
+    this.tone({ type: "sine", from: 784, to: 784, duration: 0.7, volume: 0.05, delay: 0.75 });
+  }
+
+  /** Keeps the mystery ship's warble running while it is on screen; call every frame. */
+  mysteryHum(active: boolean): void {
+    if (!active) {
+      this.stopMysteryHum();
+      return;
+    }
+    const context = this.context;
+    if (this.humNodes || !context || !this.master || context.state !== "running") return;
+    const oscillator = context.createOscillator();
+    oscillator.type = "triangle";
+    oscillator.frequency.value = 520;
+    const wobble = context.createOscillator();
+    wobble.frequency.value = 7;
+    const wobbleDepth = context.createGain();
+    wobbleDepth.gain.value = 140;
+    wobble.connect(wobbleDepth).connect(oscillator.frequency);
+    const filter = context.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 1500;
+    const envelope = context.createGain();
+    const now = context.currentTime;
+    envelope.gain.setValueAtTime(0.0001, now);
+    envelope.gain.exponentialRampToValueAtTime(0.045, now + 0.4);
+    oscillator.connect(filter).connect(envelope).connect(this.master);
+    oscillator.start(now);
+    wobble.start(now);
+    this.humNodes = { oscillator, wobble, envelope };
+  }
+
+  extraShield(): void {
+    const notes = [392, 523.3, 659.3, 784, 1046.5];
+    notes.forEach((frequency, index) => {
+      this.tone({ type: "triangle", from: frequency, to: frequency, duration: 0.14, volume: 0.09, delay: index * 0.08, lowpass: 3200 });
+    });
+    this.tone({ type: "sine", from: 1046.5, to: 1046.5, duration: 0.6, volume: 0.06, delay: 0.4 });
+  }
+
+  mysteryDestroyed(): void {
+    this.stopMysteryHum();
+    const notes = [523.3, 659.3, 784, 1046.5, 784, 1046.5];
+    notes.forEach((frequency, index) => {
+      this.tone({ type: "square", from: frequency, to: frequency, duration: 0.08, volume: 0.06, delay: 0.05 + index * 0.06, lowpass: 2800 });
+    });
+    this.noise({ duration: 0.35, volume: 0.22, filter: "bandpass", from: 3000, to: 250, q: 1 });
+    this.tone({ type: "sawtooth", from: 900, to: 70, duration: 0.3, volume: 0.1, lowpass: 2000 });
+  }
+
+  private stopMysteryHum(): void {
+    const nodes = this.humNodes;
+    if (!nodes || !this.context) return;
+    this.humNodes = null;
+    const now = this.context.currentTime;
+    nodes.envelope.gain.cancelScheduledValues(now);
+    nodes.envelope.gain.setValueAtTime(Math.max(0.0001, nodes.envelope.gain.value), now);
+    nodes.envelope.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
+    nodes.oscillator.stop(now + 0.2);
+    nodes.wobble.stop(now + 0.2);
   }
 
   private targetVolume(): number {

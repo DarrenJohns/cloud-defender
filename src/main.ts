@@ -1,8 +1,8 @@
 import "./style.css";
 import { GameScene } from "./game/gameScene";
 import { GameAudio } from "./game/audio";
-import { FAST_FORWARD_ENEMY_MULTIPLIER, createGameState, updateAftermath, updateGame } from "./game/gameLogic";
-import type { GameInput, GameMode } from "./game/gameLogic";
+import { comboMultiplier, createGameState, shotAccuracy, updateAftermath, updateGame } from "./game/gameLogic";
+import type { GameEvent, GameInput, GameMode, WaveClear } from "./game/gameLogic";
 
 function requiredElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -16,6 +16,13 @@ const assetErrorMessage = requiredElement<HTMLSpanElement>("asset-error-message"
 const levelElement = requiredElement<HTMLElement>("level");
 const scoreElement = requiredElement<HTMLElement>("score");
 const livesElement = requiredElement<HTMLElement>("lives");
+const comboElement = requiredElement<HTMLElement>("combo");
+const comboMultiplierElement = requiredElement<HTMLElement>("combo-multiplier");
+const waveBanner = requiredElement<HTMLElement>("wave-banner");
+const waveBannerLevel = requiredElement<HTMLElement>("wave-banner-level");
+const waveBannerAccuracy = requiredElement<HTMLElement>("wave-banner-accuracy");
+const waveBannerHits = requiredElement<HTMLElement>("wave-banner-hits");
+const waveBannerBonus = requiredElement<HTMLElement>("wave-banner-bonus");
 const pauseButton = requiredElement<HTMLButtonElement>("pause-button");
 const hudRestartButton = requiredElement<HTMLButtonElement>("hud-restart-button");
 const pauseButtonLabel = requiredElement<HTMLSpanElement>("pause-button-label");
@@ -31,13 +38,17 @@ const endPanel = requiredElement<HTMLElement>("end-panel");
 const endScore = requiredElement<HTMLElement>("end-score");
 const endLevel = requiredElement<HTMLElement>("end-level");
 const endKills = requiredElement<HTMLElement>("end-kills");
+const endAccuracy = requiredElement<HTMLElement>("end-accuracy");
 const endBest = requiredElement<HTMLElement>("end-best");
 const endBestScore = requiredElement<HTMLElement>("end-best-score");
 const restartButton = requiredElement<HTMLButtonElement>("restart-button");
 const splash = requiredElement<HTMLElement>("splash");
 const splashPrompt = requiredElement<HTMLElement>("splash-prompt");
 const gameScene = new GameScene(container);
-let state = createGameState();
+// ?seed=1234 replays the same run: every random choice the simulation makes comes from this seed.
+const seedParam = Number.parseInt(new URLSearchParams(window.location.search).get("seed") ?? "", 10);
+const fixedSeed = Number.isFinite(seedParam) ? seedParam >>> 0 : undefined;
+let state = createGameState(fixedSeed);
 let shipReady = false;
 let aliensReady = false;
 let shieldsReady = false;
@@ -48,6 +59,15 @@ let splashVisible = true;
 let splashHideTimer: number | undefined;
 // Visual clock that keeps running after game over so idle hover and smoke stay alive.
 let sceneSeconds = 0;
+// The simulation advances in fixed steps so it plays the same at any frame rate.
+const FIXED_STEP_SECONDS = 1 / 240;
+// Longest frame we try to catch up on; anything slower runs in slow motion instead of jumping.
+const MAX_FRAME_SECONDS = 0.1;
+let stepAccumulator = 0;
+const WAVE_BANNER_SECONDS = 2.6;
+const WAVE_BANNER_EXIT_SECONDS = 0.4;
+// Game-time countdown for the "wave secured" banner, so it holds while paused.
+let waveBannerSeconds = 0;
 const keys = new Set<string>();
 const input: GameInput = { left: false, right: false, fire: false };
 
@@ -62,10 +82,6 @@ function readMuted(): boolean {
 }
 
 const audio = new GameAudio(readMuted());
-// Highest projectile ids already heard, so each new shot plays its sound exactly once.
-let heardPlayerShotId = -1;
-let heardEnemyShotId = -1;
-let heardMode: GameMode = "playing";
 
 function setMuted(muted: boolean): void {
   audio.unlock();
@@ -85,35 +101,105 @@ function setMuteButtonState(muted: boolean): void {
   muteButton.setAttribute("aria-label", muted ? "Unmute (M)" : "Mute (M)");
 }
 
-function resetAudioTracking(): void {
-  heardPlayerShotId = -1;
-  heardEnemyShotId = -1;
-  heardMode = state.mode;
-  audio.resetMarch();
+function replayClass(element: HTMLElement, className: string): void {
+  element.classList.remove(className);
+  void element.offsetWidth;
+  element.classList.add(className);
 }
 
-function newestShotId(shots: readonly { id: number }[], heard: number): number {
-  return shots.reduce((newest, shot) => Math.max(newest, shot.id), heard);
-}
-
-function playStateSounds(before: { enemies: number; level: number; lives: number }, aftermath: boolean): void {
-  const playerShotId = newestShotId(state.playerShots, heardPlayerShotId);
-  if (playerShotId > heardPlayerShotId) audio.playerFire();
-  heardPlayerShotId = playerShotId;
-  const enemyShotId = newestShotId(state.enemyShots, heardEnemyShotId);
-  if (enemyShotId > heardEnemyShotId) audio.alienFire();
-  heardEnemyShotId = enemyShotId;
-
-  if (state.level !== before.level) {
-    audio.alienDestroyed(Math.max(1, before.enemies));
-    audio.waveCleared();
-    audio.formationFlyIn();
-  } else if (state.enemies.length < before.enemies) {
-    audio.alienDestroyed(before.enemies - state.enemies.length);
+/**
+ * Routes simulation events to audio, the HUD and the 3D scene. Events from the aftermath (shots
+ * still landing after game over) play quieter impact sounds.
+ */
+function handleGameEvents(events: readonly GameEvent[], aftermath: boolean): void {
+  if (events.length === 0) return;
+  let aliensDestroyed = 0;
+  let firewallHit = false;
+  let groundHit = false;
+  for (const event of events) {
+    switch (event.type) {
+      case "playerFired":
+        audio.playerFire();
+        break;
+      case "bombDropped":
+        audio.alienFire();
+        break;
+      case "alienDestroyed":
+        aliensDestroyed += 1;
+        break;
+      case "playerHit":
+        audio.playerHit();
+        break;
+      case "extraShield":
+        audio.extraShield();
+        replayClass(livesElement, "is-bonus");
+        break;
+      case "shieldHit":
+        firewallHit = true;
+        break;
+      case "groundImpact":
+        groundHit = true;
+        break;
+      case "mysteryDestroyed":
+        audio.mysteryDestroyed();
+        break;
+      case "bombCancelled":
+        audio.bombCancelled(event.destroyed);
+        break;
+      case "comboUp":
+        audio.comboUp(event.multiplier);
+        replayClass(comboElement, "is-up");
+        break;
+      case "waveCleared":
+        audio.waveSecured();
+        showWaveBanner(event);
+        break;
+      case "formationIncoming":
+        audio.resetMarch();
+        audio.formationFlyIn();
+        break;
+      case "marchBeat":
+        audio.marchNote();
+        break;
+      case "gameOver":
+        audio.gameOver();
+        break;
+    }
   }
-  if (state.lives < before.lives) audio.playerHit();
-  if (state.shieldHits.length > 0) audio.firewallHit(aftermath);
-  if (state.groundImpacts.length > 0) audio.groundHit(aftermath);
+  // Simultaneous kills and impacts share one sound rather than stacking.
+  if (aliensDestroyed > 0) audio.alienDestroyed(aliensDestroyed);
+  if (firewallHit) audio.firewallHit(aftermath);
+  if (groundHit) audio.groundHit(aftermath);
+  gameScene.handleEvents(events);
+}
+function formatAccuracy(accuracy: number): string {
+  return `${Math.round(accuracy * 100)}%`;
+}
+
+function showWaveBanner(clear: WaveClear): void {
+  waveBannerLevel.textContent = String(clear.level).padStart(2, "0");
+  waveBannerAccuracy.textContent = clear.shots > 0 ? formatAccuracy(clear.accuracy) : "--";
+  waveBannerHits.textContent = `${clear.hits}/${clear.shots}`;
+  waveBannerBonus.textContent = `+${clear.bonus}`;
+  waveBanner.classList.remove("is-leaving");
+  waveBanner.hidden = false;
+  waveBannerSeconds = WAVE_BANNER_SECONDS;
+}
+
+function updateWaveBanner(deltaSeconds: number): void {
+  if (waveBanner.hidden) return;
+  waveBannerSeconds -= deltaSeconds;
+  if (waveBannerSeconds <= 0) {
+    hideWaveBanner();
+  } else if (waveBannerSeconds <= WAVE_BANNER_EXIT_SECONDS) {
+    waveBanner.classList.add("is-leaving");
+  }
+}
+
+function hideWaveBanner(): void {
+  waveBannerSeconds = 0;
+  waveBanner.hidden = true;
+  waveBanner.classList.remove("is-leaving");
 }
 
 function updateInput(): void {
@@ -125,6 +211,7 @@ function updateInput(): void {
 
 function showMode(mode: GameMode): void {
   const ended = mode !== "playing";
+  if (ended && !waveBanner.hidden) hideWaveBanner();
   const wasHidden = endPanel.hidden;
   endPanel.hidden = !ended || !gameScene.isPlayerDeathComplete;
   if (wasHidden && !endPanel.hidden) fillEndPanel();
@@ -153,7 +240,8 @@ function fillEndPanel(): void {
   }
   endScore.textContent = String(state.score).padStart(5, "0");
   endLevel.textContent = String(state.level).padStart(2, "0");
-  endKills.textContent = String(Math.round(state.score / 10));
+  endKills.textContent = String(state.kills);
+  endAccuracy.textContent = formatAccuracy(shotAccuracy(state.shotsHit, state.shotsMissed));
   endBest.classList.toggle("is-new", isNewBest);
   endBest.firstChild!.textContent = isNewBest ? "New best" : "Best";
   endBestScore.textContent = String(Math.max(previousBest, state.score)).padStart(5, "0");
@@ -179,8 +267,7 @@ function dismissSplash(): void {
   keys.clear();
   updateInput();
   audio.unlock();
-  resetAudioTracking();
-  audio.formationFlyIn();
+  stepAccumulator = 0;
   splash.classList.add("is-leaving");
   // The aliens start their fly-in while the title fades away.
   splashHideTimer = window.setTimeout(() => {
@@ -197,7 +284,12 @@ function updateHud(): void {
   levelElement.textContent = String(state.level).padStart(2, "0");
   scoreElement.textContent = String(state.score).padStart(5, "0");
   livesElement.textContent = String(state.lives);
+  const multiplier = comboMultiplier(state.combo);
+  comboElement.classList.toggle("is-active", multiplier > 1 && state.mode === "playing");
+  comboMultiplierElement.textContent = `×${Math.max(2, multiplier)}`;
   showMode(state.mode);
+  // Exposed for styling hooks and end-to-end tests.
+  document.body.dataset.game = splashVisible ? "splash" : paused ? "paused" : state.mode;
 }
 
 function onAssetsReady(): void {
@@ -231,7 +323,9 @@ window.addEventListener("keydown", (event) => {
     keys.clear();
     updateInput();
     pausePanel.hidden = true;
+    state.events.length = 0;
     state.mode = "gameover";
+    audio.gameOver();
     updateHud();
     return;
   }
@@ -252,17 +346,24 @@ window.addEventListener("blur", () => {
   keys.clear();
   updateInput();
 });
+// Switching tabs or minimising pauses the game rather than letting it run unattended.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) setPaused(true);
+});
 
 function restart(withSplash = true): void {
   if (!assetsReady()) return;
   gameScene.resetForRestart();
-  state = createGameState();
+  state = createGameState(fixedSeed);
   paused = false;
+  stepAccumulator = 0;
   audio.setPaused(false);
-  resetAudioTracking();
+  audio.resetMarch();
   keys.clear();
   updateInput();
   pausePanel.hidden = true;
+  hideWaveBanner();
+  comboElement.classList.remove("is-up");
   setPauseButtonState(false);
   if (withSplash) showSplash();
   updateHud();
@@ -292,6 +393,7 @@ function setPaused(value: boolean): void {
   }
   setPauseButtonState(paused);
   pauseButton.disabled = false;
+  updateHud();
 }
 
 function setPauseButtonState(isPaused: boolean): void {
@@ -344,32 +446,38 @@ gameScene.loadClouds(
 
 let lastTime = performance.now();
 function animate(now: number): void {
-  const deltaSeconds = Math.min((now - lastTime) / 1000, 0.05);
+  const frameSeconds = Math.min(Math.max(0, now - lastTime) / 1000, MAX_FRAME_SECONDS);
   lastTime = now;
 
-  const before = { enemies: state.enemies.length, level: state.level, lives: state.lives };
-  if (assetsReady() && state.mode === "playing" && !paused && !splashVisible) {
-    updateGame(state, input, deltaSeconds);
-    playStateSounds(before, false);
-    if (state.mode === "playing" && state.formationIntro === 0 && state.enemies.length > 0) {
-      const speed = state.enemySpeed * (input.fastForward ? FAST_FORWARD_ENEMY_MULTIPLIER : 1);
-      audio.updateMarch(deltaSeconds, state.enemies.length, speed);
-    } else {
-      audio.resetMarch();
+  const simulating = assetsReady() && !paused && !splashVisible;
+  if (simulating) {
+    stepAccumulator += frameSeconds;
+    const liveEvents: GameEvent[] = [];
+    const aftermathEvents: GameEvent[] = [];
+    let playedSeconds = 0;
+    while (stepAccumulator >= FIXED_STEP_SECONDS) {
+      stepAccumulator -= FIXED_STEP_SECONDS;
+      if (state.mode === "playing") {
+        updateGame(state, input, FIXED_STEP_SECONDS);
+        liveEvents.push(...state.events.splice(0));
+        playedSeconds += FIXED_STEP_SECONDS;
+      } else {
+        updateAftermath(state, FIXED_STEP_SECONDS);
+        aftermathEvents.push(...state.events.splice(0));
+      }
     }
+    handleGameEvents(liveEvents, false);
+    handleGameEvents(aftermathEvents, true);
+    updateWaveBanner(playedSeconds);
     updateHud();
-  } else if (assetsReady() && state.mode !== "playing" && !paused) {
-    updateAftermath(state, deltaSeconds);
-    playStateSounds(before, true);
+  } else {
+    stepAccumulator = 0;
   }
-  if (state.mode === "gameover" && heardMode === "playing") audio.gameOver();
-  heardMode = state.mode;
-  if (!paused) sceneSeconds += deltaSeconds;
-  gameScene.update(state, paused ? 0 : deltaSeconds, sceneSeconds);
-  if (state.mode === "gameover") updateHud();
+  audio.mysteryHum(state.mystery !== null && state.mode === "playing" && simulating);
+  if (!paused) sceneSeconds += frameSeconds;
+  gameScene.update(state, paused ? 0 : frameSeconds, sceneSeconds);
   gameScene.render();
   requestAnimationFrame(animate);
 }
-
 requestAnimationFrame(animate);
 window.addEventListener("pagehide", () => gameScene.dispose(), { once: true });

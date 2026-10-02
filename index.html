@@ -11,6 +11,7 @@
       name="description"
       content="A 3D Azure-themed arcade game prototype."
     />
+    <link rel="icon" href="data:," />
     <title>Azure Invaders</title>
   </head>
   <body>
@@ -19,7 +20,10 @@
         <div class="hud" aria-live="polite">
           <div class="hud-stats">
             <div><span class="hud-label">LEVEL</span><strong id="level">01</strong></div>
-            <div><span class="hud-label">SCORE</span><strong id="score">00000</strong></div>
+            <div class="hud-score">
+              <span class="hud-label">SCORE</span><strong id="score">00000</strong>
+              <span id="combo" class="hud-combo" aria-label="Combo multiplier">STREAK <b id="combo-multiplier">×2</b></span>
+            </div>
             <div><span class="hud-label">SHIELDS</span><strong id="lives">3</strong></div>
           </div>
           <div class="game-controls">
@@ -42,6 +46,20 @@
             </button>
           </div>
         </div>
+
+        <section id="wave-banner" class="wave-banner" aria-live="polite" hidden>
+          <div class="wave-banner-header">
+            <span class="wave-banner-dot" aria-hidden="true"></span>
+            <span>DEFENDER.SYS</span>
+            <span class="wave-banner-code">OK 0x0000</span>
+          </div>
+          <p class="wave-banner-title">WAVE <span id="wave-banner-level">01</span> SECURED</p>
+          <dl class="wave-banner-stats">
+            <div><dt>Accuracy</dt><dd id="wave-banner-accuracy">100%</dd></div>
+            <div><dt>Hits</dt><dd id="wave-banner-hits">0/0</dd></div>
+            <div><dt>Bonus</dt><dd id="wave-banner-bonus">+0</dd></div>
+          </dl>
+        </section>
 
         <div class="end-backdrop" aria-hidden="true"></div>
         <section id="pause-panel" class="end-panel breach-panel standby-panel" aria-live="polite" hidden>
@@ -87,6 +105,7 @@
             <div><dt>Final score</dt><dd id="end-score">00000</dd></div>
             <div><dt>Wave reached</dt><dd id="end-level">01</dd></div>
             <div><dt>Threats purged</dt><dd id="end-kills">0</dd></div>
+            <div><dt>Accuracy</dt><dd id="end-accuracy">0%</dd></div>
           </dl>
           <p id="end-best" class="breach-best">Best <span id="end-best-score">00000</span></p>
           <button id="restart-button" class="breach-button" type="button">
@@ -97,7 +116,7 @@
 
         <section id="splash" class="splash" aria-label="Cloud Defender title screen">
           <div class="splash-window">
-            <img class="splash-image" src="/assets/splashscreen.png" alt="Cloud Defender" />
+            <img class="splash-image" src="/assets/splashscreen.webp" alt="Cloud Defender" />
             <p id="splash-prompt" class="splash-prompt">Loading…</p>
           </div>
         </section>

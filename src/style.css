@@ -79,6 +79,183 @@ body {
   letter-spacing: 0.08em;
 }
 
+.hud-stats strong.is-bonus {
+  animation: hud-bonus 1.6s ease-out;
+}
+
+@keyframes hud-bonus {
+  0%,
+  30% {
+    color: #e3c58e;
+    transform: scale(1.35);
+    text-shadow: 0 0 10px #c9a46299, 0 1px 6px #000c;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.hud-score {
+  position: relative;
+}
+
+.hud-combo {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-top: 3px;
+  color: #8fa5ba;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translate(-50%, -3px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.hud-combo b {
+  color: #e3c58e;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.hud-combo.is-active {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.hud-combo.is-up b {
+  display: inline-block;
+  animation: hud-bonus 0.6s ease-out;
+}
+
+.wave-banner {
+  --chamfer: 12px;
+  position: absolute;
+  top: 34%;
+  left: 50%;
+  display: flex;
+  width: min(360px, calc(100% - 40px));
+  flex-direction: column;
+  align-items: center;
+  padding: 0 0 14px;
+  background:
+    repeating-linear-gradient(0deg, #ffffff05 0 1px, transparent 1px 3px),
+    linear-gradient(180deg, #0b1828d9, #060e1ad9);
+  clip-path: polygon(var(--chamfer) 0, 100% 0, 100% calc(100% - var(--chamfer)), calc(100% - var(--chamfer)) 100%, 0 100%, 0 var(--chamfer));
+  filter: drop-shadow(0 12px 30px #000a);
+  color: #dbe9f5;
+  text-align: center;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  animation: wave-banner-in 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+
+.wave-banner[hidden] {
+  display: none;
+}
+
+.wave-banner.is-leaving {
+  animation: wave-banner-out 0.4s ease-in both;
+}
+
+.wave-banner::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  background: linear-gradient(135deg, #5fb4d8aa, #5fb4d822 40%, #5fb4d822 60%, #6fb08e99);
+  clip-path: inherit;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+@keyframes wave-banner-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scaleX(0.6);
+  }
+}
+
+@keyframes wave-banner-out {
+  to {
+    opacity: 0;
+    transform: translate(-50%, -60%);
+  }
+}
+
+.wave-banner-header {
+  display: flex;
+  align-self: stretch;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 6px 14px 6px 18px;
+  border-bottom: 1px solid #5fb4d826;
+  background: #5fb4d80f;
+  color: #9fc3d6;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+}
+
+.wave-banner-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #6fb08e;
+  box-shadow: 0 0 8px #6fb08e;
+}
+
+.wave-banner-code {
+  margin-left: auto;
+  color: #6f8a7c;
+}
+
+.wave-banner-title {
+  margin: 0 0 10px;
+  font-size: clamp(17px, 3vw, 22px);
+  font-weight: 800;
+  letter-spacing: 0.24em;
+  text-shadow: 0 0 16px #5fb4d855;
+}
+
+.wave-banner-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  align-self: stretch;
+  margin: 0 18px;
+  border-top: 1px solid #5fb4d81f;
+}
+
+.wave-banner-stats > div {
+  display: grid;
+  gap: 3px;
+  padding: 8px 4px 0;
+}
+
+.wave-banner-stats dt {
+  color: #7f97ad;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.wave-banner-stats dd {
+  margin: 0;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+#wave-banner-bonus {
+  color: #e3c58e;
+}
+
 .game-controls {
   position: absolute;
   top: -6px;
@@ -553,6 +730,14 @@ body {
   margin-bottom: 20px;
 }
 
+#end-panel {
+  width: min(440px, calc(100% - 40px));
+}
+
+#end-panel .breach-stats {
+  grid-template-columns: repeat(4, 1fr);
+}
+
 .standby-actions {
   display: flex;
   flex-wrap: wrap;
@@ -561,6 +746,9 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .wave-banner,
+  .wave-banner.is-leaving,
+  .hud-combo.is-up b,
   .standby-panel .breach-dot,
   .standby-panel .breach-title,
   .breach-panel,
