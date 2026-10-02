@@ -221,7 +221,7 @@ export class GameScene {
 
   loadShip(onReady: () => void, onError: (message: string) => void): void {
     this.loader.load(
-      "/assets/azure.glb",
+      `${import.meta.env.BASE_URL}assets/azure.glb`,
       (gltf) => {
         const model = gltf.scene;
         const bounds = new Box3().setFromObject(model);
@@ -290,7 +290,7 @@ export class GameScene {
 
   loadShields(onReady: () => void, onError: (message: string) => void): void {
     this.loader.load(
-      "/assets/firewall.glb",
+      `${import.meta.env.BASE_URL}assets/firewall.glb`,
       (gltf) => {
         const source = gltf.scene;
         source.updateMatrixWorld(true);
@@ -379,7 +379,7 @@ export class GameScene {
 
   loadClouds(onReady: () => void, onError: (message: string) => void): void {
     this.loader.load(
-      "/assets/cloud.glb",
+      `${import.meta.env.BASE_URL}assets/cloud.glb`,
       (gltf) => {
         const source = gltf.scene;
         source.updateMatrixWorld(true);

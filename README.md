@@ -10,6 +10,10 @@ A browser-based 3D arcade game: classic flat-plane gameplay, an Azure ship, ten 
 
 Game assets are included in `public/assets`; no separate model download is needed. The game displays an error if a model is missing or invalid.
 
+## Publish on GitHub Pages
+
+The `dev` branch deploys automatically to [https://darrenjohns.github.io/cloud-defender/](https://darrenjohns.github.io/cloud-defender/) through `.github/workflows/pages.yml`. The Pages build uses the repository subpath as its Vite base so models and images load correctly.
+
 Each wave uses a different trio of alien models, and waves get faster and descend as they progress. Classic rules apply: only one shot can be in flight at a time, only the lowest alien in each column can drop a bomb, and alien rows score 30/20/10 points. The mystery ship, extra shield at 1,500 points, special bombs, bomb-cancelling shots, hit streaks and wave-clear bonuses add variations to the classic gameplay.
 
 ## Controls

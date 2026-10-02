@@ -22,5 +22,5 @@ export const HOLE_CUT_FACTOR = 0.74;
 export const SHIELD_CHUNK_COLORS = ["#e13d48", "#fa606a", "#9e202d"];
 export const ALIEN_MODEL_PATHS = Array.from(
   { length: ALIEN_VARIANT_COUNT },
-  (_, index) => `/assets/alien${index + 1}.glb`,
+  (_, index) => `${import.meta.env.BASE_URL}assets/alien${index + 1}.glb`,
 );
