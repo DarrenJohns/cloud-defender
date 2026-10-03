@@ -54,16 +54,64 @@ body {
 }
 
 .hud-stats {
-  display: flex;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: start;
   gap: clamp(24px, 5vw, 62px);
+  width: min(480px, 100%);
+}
+
+.hud-score {
+  justify-self: end;
+}
+
+.hud-level {
+  justify-self: start;
 }
 
 .hud-stats > div {
   display: grid;
   gap: 5px;
+  justify-items: center;
   text-align: center;
   text-shadow: 0 1px 6px #000c, 0 0 2px #000;
+}
+
+.hud-shield-icons {
+  display: flex;
+  gap: 4px;
+  height: 22px;
+  align-items: center;
+}
+
+.hud-shield-icons img {
+  width: 20px;
+  height: 20px;
+  filter: drop-shadow(0 1px 3px #000a);
+}
+
+.hud-shield-icons img.is-new {
+  animation: hud-shield-in 1.6s ease-out;
+}
+
+/* The 3D burst replaces the icon; keep its slot briefly so the row doesn't jump mid-explosion. */
+.hud-shield-icons img.is-lost {
+  visibility: hidden;
+}
+
+@keyframes hud-shield-in {
+  0% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.3);
+    filter: drop-shadow(0 0 6px #c9a46299) drop-shadow(0 1px 3px #000a);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 .hud-label {
@@ -77,22 +125,6 @@ body {
   font-size: 18px;
   font-weight: 600;
   letter-spacing: 0.08em;
-}
-
-.hud-stats strong.is-bonus {
-  animation: hud-bonus 1.6s ease-out;
-}
-
-@keyframes hud-bonus {
-  0%,
-  30% {
-    color: #e3c58e;
-    transform: scale(1.35);
-    text-shadow: 0 0 10px #c9a46299, 0 1px 6px #000c;
-  }
-  100% {
-    transform: scale(1);
-  }
 }
 
 .hud-score {
@@ -859,11 +891,17 @@ button:focus-visible {
   }
 
   .hud-stats {
-    gap: 18px;
+    gap: 14px;
+    width: calc(100% - 112px);
   }
 
   .hud-stats strong {
     font-size: 15px;
+  }
+
+  .hud-shield-icons img {
+    width: 16px;
+    height: 16px;
   }
 
 }

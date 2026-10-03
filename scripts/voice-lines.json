@@ -1,0 +1,12 @@
+{
+  "splash-screen": "Welcome to Cloud Defender!",
+  "start-game": "Get ready, player one!",
+  "firewall-lost": "Firewall taken off-line!",
+  "shield-lost": "Shield destroyed!",
+  "last-shield": "Warning... last shield! Earn fifteen hundred points to acquire a new shield!",
+  "extra-shield": "New shield acquired!",
+  "zero-day": "Zero-day detected!",
+  "wave-secured": "Wave secured.",
+  "next-wave": "Next wave... incoming!",
+  "game-over": "Game over, player one. You have been hacked!"
+}

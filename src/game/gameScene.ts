@@ -9,6 +9,7 @@ import { makeErodibleMaterial, makeHoleWalls, setDamageUniforms } from "./scene/
 import { ALIEN_DEPTH_MULTIPLIER, ROW_SHADOW_LIFT, SHIP_SHADOW_DEPTH, SHIP_SHADOW_WIDTH, drawShieldShadow, makeAlienShadow, makeShieldShadow, makeShipShadow, updateAlienShadow } from "./scene/shadows";
 import type { ShieldShadow } from "./scene/shadows";
 import { MYSTERY_BEACON_COUNT, makeMysteryShip } from "./scene/mysteryShip";
+import { HudShieldBurst } from "./scene/hudShieldBurst";
 import { formationFlightPose, makeEnemy } from "./scene/formation";
 import { BINARY_FLICKER_SECONDS, BINARY_GLYPH_HEIGHT, BINARY_GLYPH_SPACING, BOMB_CANCEL_COLORS, HEX_GLYPH_HEIGHT, HEX_GLYPH_WIDTH, MALWARE_CUBE_SIZE, WORM_SEGMENT_LAG, WORM_SEGMENT_SPACING, createBinaryGlyphTextures, createHexGlyphTextures, createMalwareFaceTextures, makeBinaryStream, makeMalwareBomb, makeRansomwareBomb, makeWormBomb } from "./scene/bombs";
 
@@ -100,6 +101,7 @@ export class GameScene {
   private readonly clouds: Group[] = [];
   private readonly cloudMotion: CloudMotion[] = [];
   private readonly cloudHazeTexture: CanvasTexture;
+  private readonly hudShieldBurst: HudShieldBurst;
   private readonly alienModels: Group[] = [];
   private readonly accentLight = new PointLight("#54bfff", 12, 18, 2);
   private readonly shadow: Mesh;
@@ -175,6 +177,7 @@ export class GameScene {
     this.renderer.outputColorSpace = "srgb";
     this.dustTexture = createDustTexture();
     this.cloudHazeTexture = createCloudHazeTexture();
+    this.hudShieldBurst = new HudShieldBurst(`${import.meta.env.BASE_URL}assets/shield-hud.glb`, this.cloudHazeTexture);
     container.append(this.renderer.domElement);
     this.camera.position.set(0, CAMERA_HEIGHT, CAMERA_DISTANCE);
     this.camera.lookAt(0, 0, 0);
@@ -660,9 +663,17 @@ export class GameScene {
   render(): void {
     this.updateParallax();
     this.renderer.render(this.scene, this.camera);
+    if (this.hudShieldBurst.active) {
+      this.hudShieldBurst.render(this.renderer, window.innerWidth, window.innerHeight);
+    }
+  }
+
+  burstHudShield(iconRect: DOMRect): void {
+    this.hudShieldBurst.burst(iconRect, this.renderer.domElement.getBoundingClientRect());
   }
 
   resetForRestart(): void {
+    this.hudShieldBurst.clear();
     for (const view of this.enemyViews.values()) this.scene.remove(view);
     this.enemyViews.clear();
     for (const id of [...this.enemyShadows.keys()]) this.removeEnemyShadow(id);
@@ -714,6 +725,7 @@ export class GameScene {
     window.removeEventListener("blur", this.resetParallaxTarget);
     this.resetForRestart();
     this.renderer.dispose();
+    this.hudShieldBurst.dispose();
     for (const geometry of this.mysteryView.geometries) geometry.dispose();
     for (const material of this.mysteryView.materials) material.dispose();
     this.fragmentGeometry.dispose();

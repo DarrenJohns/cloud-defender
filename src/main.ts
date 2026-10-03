@@ -1,6 +1,7 @@
 import "./style.css";
 import { GameScene } from "./game/gameScene";
 import { GameAudio } from "./game/audio";
+import { waveLine } from "./game/announcer";
 import { comboMultiplier, createGameState, shotAccuracy, updateAftermath, updateGame } from "./game/gameLogic";
 import type { GameEvent, GameInput, GameMode, WaveClear } from "./game/gameLogic";
 
@@ -16,6 +17,9 @@ const assetErrorMessage = requiredElement<HTMLSpanElement>("asset-error-message"
 const levelElement = requiredElement<HTMLElement>("level");
 const scoreElement = requiredElement<HTMLElement>("score");
 const livesElement = requiredElement<HTMLElement>("lives");
+const shieldIconUrl = `${import.meta.env.BASE_URL}favicon.png`;
+let shownLives = -1;
+let shieldBonusPending = false;
 const comboElement = requiredElement<HTMLElement>("combo");
 const comboMultiplierElement = requiredElement<HTMLElement>("combo-multiplier");
 const waveBanner = requiredElement<HTMLElement>("wave-banner");
@@ -129,16 +133,24 @@ function handleGameEvents(events: readonly GameEvent[], aftermath: boolean): voi
         break;
       case "playerHit":
         audio.playerHit();
+        if (!aftermath && event.lives > 0) audio.announce(event.lives === 1 ? "last-shield" : "shield-lost");
         break;
       case "extraShield":
         audio.extraShield();
-        replayClass(livesElement, "is-bonus");
+        audio.announce("extra-shield");
+        shieldBonusPending = true;
         break;
       case "shieldHit":
         firewallHit = true;
         break;
       case "groundImpact":
         groundHit = true;
+        break;
+      case "mysteryAppeared":
+        audio.announce("zero-day");
+        break;
+      case "firewallDestroyed":
+        if (!aftermath) audio.announce("firewall-lost");
         break;
       case "mysteryDestroyed":
         audio.mysteryDestroyed();
@@ -152,17 +164,20 @@ function handleGameEvents(events: readonly GameEvent[], aftermath: boolean): voi
         break;
       case "waveCleared":
         audio.waveSecured();
+        audio.announce("wave-secured");
         showWaveBanner(event);
         break;
       case "formationIncoming":
         audio.resetMarch();
         audio.formationFlyIn();
+        audio.announce(waveLine(event.level));
         break;
       case "marchBeat":
         audio.marchNote();
         break;
       case "gameOver":
         audio.gameOver();
+        audio.announce("game-over");
         break;
     }
   }
@@ -259,6 +274,7 @@ function showSplash(): void {
   splash.hidden = false;
   splash.classList.remove("is-leaving");
   updateSplashPrompt();
+  audio.announceWhenAllowed("splash-screen");
 }
 
 function dismissSplash(): void {
@@ -280,10 +296,41 @@ function assetsReady(): boolean {
   return shipReady && aliensReady && shieldsReady && cloudsReady;
 }
 
+function renderShieldIcons(lives: number): void {
+  if (lives === shownLives) {
+    return;
+  }
+  const icons = Array.from(livesElement.querySelectorAll<HTMLImageElement>("img:not(.is-lost)"));
+  for (let i = icons.length; i < lives; i += 1) {
+    const icon = document.createElement("img");
+    icon.src = shieldIconUrl;
+    icon.alt = "";
+    icon.draggable = false;
+    if (shieldBonusPending) {
+      icon.classList.add("is-new");
+    }
+    livesElement.append(icon);
+  }
+  for (let i = icons.length - 1; i >= lives; i -= 1) {
+    const icon = icons[i];
+    if (shownLives < 0) {
+      icon.remove();
+      continue;
+    }
+    icon.classList.add("is-lost");
+    gameScene.burstHudShield(icon.getBoundingClientRect());
+    window.setTimeout(() => icon.remove(), 1100);
+  }
+  shieldBonusPending = false;
+  shownLives = lives;
+  livesElement.dataset.lives = String(lives);
+  livesElement.setAttribute("aria-label", `${lives} shield${lives === 1 ? "" : "s"}`);
+}
+
 function updateHud(): void {
   levelElement.textContent = String(state.level).padStart(2, "0");
   scoreElement.textContent = String(state.score).padStart(5, "0");
-  livesElement.textContent = String(state.lives);
+  renderShieldIcons(state.lives);
   const multiplier = comboMultiplier(state.combo);
   comboElement.classList.toggle("is-active", multiplier > 1 && state.mode === "playing");
   comboMultiplierElement.textContent = `×${Math.max(2, multiplier)}`;
@@ -354,6 +401,7 @@ document.addEventListener("visibilitychange", () => {
 function restart(withSplash = true): void {
   if (!assetsReady()) return;
   gameScene.resetForRestart();
+  audio.stopVoice();
   state = createGameState(fixedSeed);
   paused = false;
   stepAccumulator = 0;
@@ -479,5 +527,7 @@ function animate(now: number): void {
   gameScene.render();
   requestAnimationFrame(animate);
 }
+// Welcome on the title screen; if the browser blocks audio until a gesture, it plays on the first one.
+audio.announceWhenAllowed("splash-screen");
 requestAnimationFrame(animate);
 window.addEventListener("pagehide", () => gameScene.dispose(), { once: true });

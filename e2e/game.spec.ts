@@ -28,7 +28,8 @@ test.describe("Cloud Defender", () => {
     await expect(page.locator("#game canvas")).toBeVisible();
     await expect(page.locator("#level")).toHaveText("01");
     await expect(page.locator("#score")).toHaveText("00000");
-    await expect(page.locator("#lives")).toHaveText("3");
+    await expect(page.locator("#lives")).toHaveAttribute("data-lives", "3");
+    await expect(page.locator("#lives img")).toHaveCount(3);
     await expect(page.locator("#asset-notice")).toBeHidden();
     expect(errors).toEqual([]);
   });

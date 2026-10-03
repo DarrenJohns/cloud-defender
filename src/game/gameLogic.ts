@@ -108,6 +108,8 @@ export type GameEvent =
   | ({ type: "shieldHit" } & ShieldHit)
   | ({ type: "groundImpact" } & GroundImpact)
   | ({ type: "mysteryDestroyed" } & MysteryHit)
+  | { type: "mysteryAppeared"; id: number }
+  | { type: "firewallDestroyed"; shieldId: number }
   | ({ type: "bombCancelled" } & BombCancel)
   | { type: "comboUp"; multiplier: number }
   | ({ type: "waveCleared" } & WaveClear)
@@ -389,6 +391,7 @@ function addShieldHole(
     radius,
     seed: nextRandom(state) * 1000,
   });
+  const wasDestroyed = shield.destroyed;
   updateShieldDestruction(shield);
   emit(state, {
     type: "shieldHit",
@@ -397,6 +400,7 @@ function addShieldHole(
     y,
     seed: nextRandom(state) * 0xffffffff,
   });
+  if (!wasDestroyed && shield.destroyed) emit(state, { type: "firewallDestroyed", shieldId: shield.id });
   return true;
 }
 
@@ -466,6 +470,7 @@ function updateMystery(state: GameState, delta: number, random: () => number): v
     points: MYSTERY_POINTS[Math.floor(random() * MYSTERY_POINTS.length)] ?? MYSTERY_POINTS[0],
   };
   state.mysteryTimer = nextMysteryDelay(random);
+  emit(state, { type: "mysteryAppeared", id: state.mystery.id });
 }
 
 function hitsMystery(ship: MysteryShip, shot: Projectile, startY: number): boolean {

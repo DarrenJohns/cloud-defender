@@ -3,3 +3,6 @@ dist/
 *.tsbuildinfo
 test-results/
 playwright-report/
+
+# Style-reference audio (not for distribution)
+voice-reference/

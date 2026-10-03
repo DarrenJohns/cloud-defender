@@ -197,6 +197,7 @@ describe("game simulation", () => {
     state.mysteryTimer = 0.01;
     updateGame(state, idle, 0.05, () => 0.9);
     expect(state.mystery).toMatchObject({ x: MYSTERY_EDGE, direction: -1, points: 300 });
+    expect(eventsOf(state, "mysteryAppeared")).toEqual([{ id: state.mystery!.id }]);
 
     for (let step = 0; step < 200 && state.mystery; step += 1) {
       state.enemyFireCooldown = 100;
@@ -360,6 +361,7 @@ describe("game simulation", () => {
 
     expect(hitCount).toBeGreaterThan(1);
     expect(shield.destroyed).toBe(true);
+    expect(eventsOf(state, "firewallDestroyed")).toEqual([{ shieldId: shield.id }]);
     expect(isShieldDamagedAt(shield, shield.x, shield.y)).toBe(true);
 
     state.playerShots = [{ id: 70, x: shield.x, y: shield.y - shield.height / 2 - 0.1 }];

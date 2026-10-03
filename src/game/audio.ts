@@ -1,5 +1,12 @@
+import { ALL_VOICE_LINES, AnnouncerQueue, VOICE_MAX_WAIT_SECONDS } from "./announcer";
+import type { VoiceLine } from "./announcer";
+
 const MARCH_NOTES = [55, 49, 46.25, 41.2];
 const MASTER_VOLUME = 0.32;
+// Relative to the master; the announcer sits clearly above the effects.
+const VOICE_VOLUME = 1.1;
+// Effects dip to this level while a line is spoken so the words stay intelligible.
+const VOICE_DUCK_LEVEL = 0.5;
 
 type AudioContextConstructor = typeof AudioContext;
 
@@ -13,8 +20,19 @@ export class GameAudio {
   private marchStep = 0;
   private humNodes: { oscillator: OscillatorNode; wobble: OscillatorNode; envelope: GainNode } | null = null;
   private readonly lastPlayed = new Map<string, number>();
+  private sfxBus: GainNode | null = null;
+  private voiceBus: GainNode | null = null;
+  private readonly voiceBuffers = new Map<VoiceLine, AudioBuffer>();
+  private readonly announcer = new AnnouncerQueue();
+  private voiceSource: AudioBufferSourceNode | null = null;
+  private voicesLoading = false;
+  private awaitingVoices: { line: VoiceLine; requestedAt: number }[] = [];
+  private awaitingUnlock: VoiceLine[] = [];
 
-  constructor(muted = false) {
+  constructor(
+    muted = false,
+    private readonly voiceBaseUrl = `${import.meta.env.BASE_URL}assets/voice/`,
+  ) {
     this.muted = muted;
   }
 
@@ -40,7 +58,18 @@ export class GameAudio {
       compressor.threshold.value = -14;
       compressor.ratio.value = 4;
       this.master.connect(compressor).connect(this.context.destination);
+      this.sfxBus = this.context.createGain();
+      this.sfxBus.connect(this.master);
+      this.voiceBus = this.createVoiceBus(this.context, this.master);
       this.noiseBuffer = this.createNoiseBuffer(this.context);
+      const context = this.context;
+      context.addEventListener("statechange", () => {
+        if (context.state !== "running" || this.awaitingUnlock.length === 0) return;
+        const lines = this.awaitingUnlock;
+        this.awaitingUnlock = [];
+        for (const line of lines) this.announce(line);
+      });
+      void this.loadVoices(this.context);
     }
     if (this.context.state === "suspended") void this.context.resume().catch(() => undefined);
   }
@@ -163,7 +192,7 @@ export class GameAudio {
     const now = context.currentTime;
     envelope.gain.setValueAtTime(0.0001, now);
     envelope.gain.exponentialRampToValueAtTime(0.045, now + 0.4);
-    oscillator.connect(filter).connect(envelope).connect(this.master);
+    oscillator.connect(filter).connect(envelope).connect(this.sfxBus!);
     oscillator.start(now);
     wobble.start(now);
     this.humNodes = { oscillator, wobble, envelope };
@@ -185,6 +214,141 @@ export class GameAudio {
     });
     this.noise({ duration: 0.35, volume: 0.22, filter: "bandpass", from: 3000, to: 250, q: 1 });
     this.tone({ type: "sawtooth", from: 900, to: 70, duration: 0.3, volume: 0.1, lowpass: 2000 });
+  }
+
+  /** Speaks an announcer line, subject to priority, queueing and cooldown rules. */
+  announce(line: VoiceLine): void {
+    if (this.context?.state === "suspended" && !this.muted && !this.paused) {
+      // Waiting for the first user gesture; play in order once the browser allows audio.
+      if (!this.awaitingUnlock.includes(line)) this.awaitingUnlock.push(line);
+      return;
+    }
+    const context = this.ready();
+    if (!context) return;
+    if (!this.voiceBuffers.has(line)) {
+      // The very first lines can arrive while clips are still decoding; replay once they're ready.
+      if (this.voicesLoading) this.awaitingVoices.push({ line, requestedAt: context.currentTime });
+      return;
+    }
+    const decision = this.announcer.request(line, context.currentTime);
+    if (decision === "play" || decision === "interrupt") this.startVoice(context, line);
+  }
+
+  /**
+   * Speaks a line as soon as the browser allows audio. Outside a user gesture the context starts
+   * suspended, so the line waits and plays on the first interaction instead of being lost.
+   */
+  announceWhenAllowed(line: VoiceLine): void {
+    this.unlock();
+    this.announce(line);
+  }
+
+  /** Silences the announcer and forgets queued lines, e.g. when a new game starts. */
+  stopVoice(): void {
+    this.announcer.reset();
+    this.awaitingVoices = [];
+    this.awaitingUnlock = [];
+    const source = this.voiceSource;
+    this.voiceSource = null;
+    if (source) {
+      try {
+        source.stop();
+      } catch {
+        // Already stopped.
+      }
+    }
+    this.restoreDuck();
+  }
+
+  private startVoice(context: AudioContext, line: VoiceLine): void {
+    const buffer = this.voiceBuffers.get(line);
+    if (!buffer || !this.voiceBus) return;
+    const previous = this.voiceSource;
+    if (previous) {
+      previous.onended = null;
+      try {
+        previous.stop();
+      } catch {
+        // Already stopped.
+      }
+    }
+    const source = context.createBufferSource();
+    source.buffer = buffer;
+    source.connect(this.voiceBus);
+    const now = context.currentTime;
+    source.start(now);
+    this.voiceSource = source;
+    this.announcer.started(line, now, buffer.duration);
+    this.duck(now, buffer.duration);
+    source.onended = () => {
+      if (this.voiceSource !== source) return;
+      this.voiceSource = null;
+      const ready = this.ready();
+      const next = ready ? this.announcer.next(ready.currentTime) : null;
+      if (ready && next) this.startVoice(ready, next);
+    };
+  }
+
+  private duck(now: number, duration: number): void {
+    const gain = this.sfxBus?.gain;
+    if (!gain) return;
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(gain.value, now);
+    gain.linearRampToValueAtTime(VOICE_DUCK_LEVEL, now + 0.06);
+    gain.setValueAtTime(VOICE_DUCK_LEVEL, now + duration);
+    gain.linearRampToValueAtTime(1, now + duration + 0.35);
+  }
+
+  private restoreDuck(): void {
+    if (!this.context || !this.sfxBus) return;
+    const gain = this.sfxBus.gain;
+    const now = this.context.currentTime;
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(gain.value, now);
+    gain.linearRampToValueAtTime(1, now + 0.2);
+  }
+
+  /** Light "comms" colouring: trims lows and adds a little presence, without sounding harsh. */
+  private createVoiceBus(context: AudioContext, destination: AudioNode): GainNode {
+    const input = context.createGain();
+    input.gain.value = VOICE_VOLUME;
+    const highpass = context.createBiquadFilter();
+    highpass.type = "highpass";
+    // Gentle band-limit keeps the deep announcer body while staying out of the SFX low end.
+    highpass.frequency.value = 75;
+    const presence = context.createBiquadFilter();
+    presence.type = "peaking";
+    presence.frequency.value = 2600;
+    presence.Q.value = 0.9;
+    presence.gain.value = 2;
+    const lowpass = context.createBiquadFilter();
+    lowpass.type = "lowpass";
+    lowpass.frequency.value = 9000;
+    input.connect(highpass).connect(presence).connect(lowpass).connect(destination);
+    return input;
+  }
+
+  private async loadVoices(context: AudioContext): Promise<void> {
+    this.voicesLoading = true;
+    await Promise.all(
+      ALL_VOICE_LINES.map(async (line) => {
+        try {
+          const response = await fetch(`${this.voiceBaseUrl}${line}.mp3`);
+          if (!response.ok) return;
+          const buffer = await context.decodeAudioData(await response.arrayBuffer());
+          this.voiceBuffers.set(line, buffer);
+        } catch {
+          // A missing or undecodable clip just means that line stays silent.
+        }
+      }),
+    );
+    this.voicesLoading = false;
+    const waiting = this.awaitingVoices;
+    this.awaitingVoices = [];
+    // Replayed in order so the announcer queue sequences them (e.g. welcome, then get ready).
+    for (const entry of waiting) {
+      if (context.currentTime - entry.requestedAt <= VOICE_MAX_WAIT_SECONDS) this.announce(entry.line);
+    }
   }
 
   private stopMysteryHum(): void {
@@ -255,7 +419,7 @@ export class GameAudio {
       filter.frequency.value = options.lowpass;
       output = output.connect(filter);
     }
-    output.connect(envelope).connect(this.master);
+    output.connect(envelope).connect(this.sfxBus!);
     oscillator.start(start);
     oscillator.stop(end + 0.02);
   }
@@ -286,7 +450,7 @@ export class GameAudio {
     envelope.gain.setValueAtTime(0.0001, start);
     envelope.gain.exponentialRampToValueAtTime(options.volume, start + attack);
     envelope.gain.exponentialRampToValueAtTime(0.0001, end);
-    source.connect(filter).connect(envelope).connect(this.master);
+    source.connect(filter).connect(envelope).connect(this.sfxBus!);
     source.start(start, Math.random() * 0.5);
     source.stop(end + 0.02);
   }
