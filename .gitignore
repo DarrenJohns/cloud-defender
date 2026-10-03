@@ -6,3 +6,5 @@ playwright-report/
 
 # Style-reference audio (not for distribution)
 voice-reference/
+__pycache__/
+*.py[cod]
