@@ -43,6 +43,43 @@ test.describe("Cloud Defender", () => {
     await page.keyboard.up("Space");
   });
 
+  test("showcases a shield, freezes combat and flies it into the HUD without exceeding three", async ({ page }) => {
+    const errors = trackErrors(page);
+    await startGame(page);
+    await page.keyboard.press("KeyS");
+    await expect(page.locator("body")).toHaveAttribute("data-game", "shield-award");
+    await expect(page.locator("#shield-award")).toBeVisible();
+    await expect(page.locator("#shield-award")).toHaveText("");
+    await expect(page.locator("#shield-award")).toHaveAttribute("data-phase", "showcase");
+    await expect(page.locator("#lives img.is-arriving")).toHaveCount(1);
+    await expect(page.locator("#lives")).toHaveAttribute("data-lives", "3");
+    await page.keyboard.down("Space");
+    await page.keyboard.press("KeyS");
+    await page.waitForTimeout(700);
+    await expect(page.locator("#score")).toHaveText("00000");
+    await expect(page.locator("#lives img")).toHaveCount(3);
+    await expect(page.locator("#shield-award")).toHaveAttribute("data-phase", "flight", { timeout: 5_000 });
+    await expect(page.locator("#shield-award")).toBeHidden({ timeout: 5_000 });
+    await expect(page.locator("body")).toHaveAttribute("data-game", "playing");
+    await expect(page.locator("#lives img.is-arriving")).toHaveCount(0);
+    await page.keyboard.up("Space");
+    await page.keyboard.down("Space");
+    await expect.poll(async () => Number(await page.locator("#score").textContent()), { timeout: 45_000 }).toBeGreaterThan(0);
+    await page.keyboard.up("Space");
+    expect(errors).toEqual([]);
+  });
+
+  test("restart cancels a shield showcase and resets the HUD", async ({ page }) => {
+    await startGame(page);
+    await page.keyboard.press("KeyS");
+    await expect(page.locator("#shield-award")).toBeVisible();
+    await page.keyboard.press("KeyR");
+    await expect(page.locator("#shield-award")).toBeHidden();
+    await expect(page.locator("body")).toHaveAttribute("data-game", "splash");
+    await expect(page.locator("#lives img.is-arriving")).toHaveCount(0);
+    await expect(page.locator("#lives img")).toHaveCount(3);
+  });
+
   test("pauses and resumes from the keyboard and the panel", async ({ page }) => {
     await startGame(page);
 

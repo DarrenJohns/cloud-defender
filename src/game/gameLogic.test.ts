@@ -234,21 +234,69 @@ describe("game simulation", () => {
     expect(state.mystery).toBeNull();
   });
 
-  it("grants one extra shield the first time the score reaches the bonus threshold", () => {
+  it("restores a lost shield at each score milestone without repeating awards", () => {
     const state = createGameState();
     state.enemyFireCooldown = 100;
+    state.lives = 2;
     state.score = EXTRA_SHIELD_SCORE - 1;
     updateGame(state, idle, 0.016);
-    expect(state.lives).toBe(3);
+    expect(state.lives).toBe(2);
+    expect(eventsOf(state, "extraShield")).toEqual([]);
 
     state.score = EXTRA_SHIELD_SCORE;
     updateGame(state, idle, 0.016);
-    expect(state.lives).toBe(4);
+    expect(state.lives).toBe(3);
+    expect(eventsOf(state, "extraShield")).toEqual([{ lives: 3 }]);
 
+    state.lives = 2;
+    updateGame(state, idle, 0.016);
+    expect(state.lives).toBe(2);
+
+    state.score = EXTRA_SHIELD_SCORE * 2;
+    updateGame(state, idle, 0.016);
+    expect(state.lives).toBe(3);
+    expect(eventsOf(state, "extraShield")).toEqual([{ lives: 3 }, { lives: 3 }]);
+    expect(createNewGame().nextShieldScore).toBe(EXTRA_SHIELD_SCORE);
+  });
+
+  it("consumes milestones at full shields without banking a replacement", () => {
+    const state = createGameState();
+    state.enemyFireCooldown = 100;
     state.score = EXTRA_SHIELD_SCORE * 3;
     updateGame(state, idle, 0.016);
-    expect(state.lives).toBe(4);
-    expect(createNewGame().extraShieldAwarded).toBe(false);
+    expect(state.lives).toBe(3);
+    expect(state.nextShieldScore).toBe(EXTRA_SHIELD_SCORE * 4);
+    expect(eventsOf(state, "extraShield")).toEqual([]);
+
+    state.lives = 2;
+    updateGame(state, idle, 0.016);
+    expect(state.lives).toBe(2);
+
+    state.score = EXTRA_SHIELD_SCORE * 4;
+    updateGame(state, idle, 0.016);
+    expect(state.lives).toBe(3);
+    expect(eventsOf(state, "extraShield")).toEqual([{ lives: 3 }]);
+  });
+
+  it("handles multiple crossed milestones while capping shields at three", () => {
+    const state = createGameState();
+    state.enemyFireCooldown = 100;
+    state.lives = 1;
+    state.score = EXTRA_SHIELD_SCORE * 3 + 100;
+    updateGame(state, idle, 0.016);
+    expect(state.lives).toBe(3);
+    expect(state.nextShieldScore).toBe(EXTRA_SHIELD_SCORE * 4);
+    expect(eventsOf(state, "extraShield")).toEqual([{ lives: 2 }, { lives: 3 }]);
+  });
+
+  it("does not restore shields after game over", () => {
+    const state = createGameState();
+    state.mode = "gameover";
+    state.lives = 0;
+    state.score = EXTRA_SHIELD_SCORE;
+    updateGame(state, idle, 0.016);
+    expect(state.lives).toBe(0);
+    expect(eventsOf(state, "extraShield")).toEqual([]);
   });
 
   it("clears the mystery ship when the wave is cleared", () => {

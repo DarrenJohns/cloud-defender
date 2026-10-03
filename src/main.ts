@@ -2,7 +2,8 @@ import "./style.css";
 import { GameScene } from "./game/gameScene";
 import { GameAudio } from "./game/audio";
 import { waveLine } from "./game/announcer";
-import { comboMultiplier, createGameState, shotAccuracy, updateAftermath, updateGame } from "./game/gameLogic";
+import { comboMultiplier, createGameState, MAX_SHIELDS, shotAccuracy, updateAftermath, updateGame } from "./game/gameLogic";
+import { ShieldAward } from "./game/scene/shieldAward";
 import type { GameEvent, GameInput, GameMode, WaveClear } from "./game/gameLogic";
 
 function requiredElement<T extends HTMLElement>(id: string): T {
@@ -57,6 +58,7 @@ let shipReady = false;
 let aliensReady = false;
 let shieldsReady = false;
 let cloudsReady = false;
+let awardReady = false;
 let paused = false;
 // The title screen gates every new game; the simulation waits until it is dismissed.
 let splashVisible = true;
@@ -86,6 +88,13 @@ function readMuted(): boolean {
 }
 
 const audio = new GameAudio(readMuted());
+const shieldAward = new ShieldAward(() => {
+  awardReady = true;
+  onAssetsReady();
+}, (message) => {
+  assetErrorMessage.textContent = message;
+  assetNotice.hidden = false;
+});
 
 function setMuted(muted: boolean): void {
   audio.unlock();
@@ -136,8 +145,6 @@ function handleGameEvents(events: readonly GameEvent[], aftermath: boolean): voi
         if (!aftermath && event.lives > 0) audio.announce(event.lives === 1 ? "last-shield" : "shield-lost");
         break;
       case "extraShield":
-        audio.extraShield();
-        audio.announce("extra-shield");
         shieldBonusPending = true;
         break;
       case "shieldHit":
@@ -186,6 +193,27 @@ function handleGameEvents(events: readonly GameEvent[], aftermath: boolean): voi
   if (firewallHit) audio.firewallHit(aftermath);
   if (groundHit) audio.groundHit(aftermath);
   gameScene.handleEvents(events);
+  if (shieldBonusPending && !aftermath) beginShieldAward();
+}
+
+function beginShieldAward(): void {
+  renderShieldIcons(state.lives);
+  const icons = livesElement.querySelectorAll<HTMLImageElement>("img:not(.is-lost)");
+  const target = icons[icons.length - 1];
+  if (!target) throw new Error("Missing HUD shield for acquisition sequence.");
+  target.classList.add("is-arriving");
+  shieldAward.start(target);
+  keys.clear();
+  updateInput();
+  audio.stopVoice();
+  audio.extraShield();
+  audio.announce("extra-shield");
+  updateHud();
+}
+
+function clearShieldAward(): void {
+  shieldAward.clear();
+  livesElement.querySelectorAll(".is-arriving").forEach((icon) => icon.classList.remove("is-arriving"));
 }
 function formatAccuracy(accuracy: number): string {
   return `${Math.round(accuracy * 100)}%`;
@@ -293,7 +321,7 @@ function dismissSplash(): void {
 }
 
 function assetsReady(): boolean {
-  return shipReady && aliensReady && shieldsReady && cloudsReady;
+  return shipReady && aliensReady && shieldsReady && cloudsReady && awardReady;
 }
 
 function renderShieldIcons(lives: number): void {
@@ -307,7 +335,7 @@ function renderShieldIcons(lives: number): void {
     icon.alt = "";
     icon.draggable = false;
     if (shieldBonusPending) {
-      icon.classList.add("is-new");
+      icon.classList.add("is-arriving");
     }
     livesElement.append(icon);
   }
@@ -336,7 +364,7 @@ function updateHud(): void {
   comboMultiplierElement.textContent = `×${Math.max(2, multiplier)}`;
   showMode(state.mode);
   // Exposed for styling hooks and end-to-end tests.
-  document.body.dataset.game = splashVisible ? "splash" : paused ? "paused" : state.mode;
+  document.body.dataset.game = splashVisible ? "splash" : paused ? "paused" : shieldAward.active ? "shield-award" : state.mode;
 }
 
 function onAssetsReady(): void {
@@ -359,12 +387,19 @@ window.addEventListener("keydown", (event) => {
     if (!event.repeat && ["Enter", "Space"].includes(event.code)) dismissSplash();
     return;
   }
-  if (event.repeat && ["Enter", "KeyP", "KeyR", "KeyT"].includes(event.code)) return;
+  if (event.repeat && ["Enter", "KeyP", "KeyR", "KeyT", "KeyS"].includes(event.code)) return;
+  if (event.code === "KeyS" && assetsReady() && state.mode === "playing" && !paused && !shieldAward.active) {
+    state.lives = Math.min(MAX_SHIELDS, state.lives + 1);
+    shieldBonusPending = true;
+    beginShieldAward();
+    return;
+  }
   if (event.code === "KeyP" && assetsReady() && state.mode === "playing") {
     setPaused(!paused);
     return;
   }
   if (event.code === "KeyT" && assetsReady()) {
+    clearShieldAward();
     if (state.mode === "gameover") restart(false);
     paused = false;
     keys.clear();
@@ -380,7 +415,7 @@ window.addEventListener("keydown", (event) => {
     restart();
     return;
   }
-  if (paused) return;
+  if (paused || shieldAward.active) return;
   keys.add(event.code);
   updateInput();
   if (event.code === "Enter" && state.mode !== "playing" && assetsReady()) restart();
@@ -401,6 +436,7 @@ document.addEventListener("visibilitychange", () => {
 function restart(withSplash = true): void {
   if (!assetsReady()) return;
   gameScene.resetForRestart();
+  clearShieldAward();
   audio.stopVoice();
   state = createGameState(fixedSeed);
   paused = false;
@@ -497,7 +533,7 @@ function animate(now: number): void {
   const frameSeconds = Math.min(Math.max(0, now - lastTime) / 1000, MAX_FRAME_SECONDS);
   lastTime = now;
 
-  const simulating = assetsReady() && !paused && !splashVisible;
+  const simulating = assetsReady() && !paused && !splashVisible && !shieldAward.active;
   if (simulating) {
     stepAccumulator += frameSeconds;
     const liveEvents: GameEvent[] = [];
@@ -509,6 +545,7 @@ function animate(now: number): void {
         updateGame(state, input, FIXED_STEP_SECONDS);
         liveEvents.push(...state.events.splice(0));
         playedSeconds += FIXED_STEP_SECONDS;
+        if (liveEvents.some((event) => event.type === "extraShield")) break;
       } else {
         updateAftermath(state, FIXED_STEP_SECONDS);
         aftermathEvents.push(...state.events.splice(0));
@@ -522,12 +559,21 @@ function animate(now: number): void {
     stepAccumulator = 0;
   }
   audio.mysteryHum(state.mystery !== null && state.mode === "playing" && simulating);
-  if (!paused) sceneSeconds += frameSeconds;
-  gameScene.update(state, paused ? 0 : frameSeconds, sceneSeconds);
+  if (shieldAward.update(paused ? 0 : frameSeconds)) {
+    clearShieldAward();
+    livesElement.querySelectorAll("img:not(.is-lost)").forEach((icon) => replayClass(icon as HTMLElement, "is-new"));
+    updateHud();
+  }
+  const frozen = paused || shieldAward.active;
+  if (!frozen) sceneSeconds += frameSeconds;
+  gameScene.update(state, frozen ? 0 : frameSeconds, sceneSeconds);
   gameScene.render();
   requestAnimationFrame(animate);
 }
 // Welcome on the title screen; if the browser blocks audio until a gesture, it plays on the first one.
 audio.announceWhenAllowed("splash-screen");
 requestAnimationFrame(animate);
-window.addEventListener("pagehide", () => gameScene.dispose(), { once: true });
+window.addEventListener("pagehide", () => {
+  gameScene.dispose();
+  shieldAward.dispose();
+}, { once: true });

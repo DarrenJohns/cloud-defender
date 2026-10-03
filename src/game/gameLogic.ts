@@ -152,8 +152,8 @@ export interface GameState {
   mystery: MysteryShip | null;
   /** Seconds until the next mystery ship may appear. */
   mysteryTimer: number;
-  /** True once the one-off bonus shield for reaching EXTRA_SHIELD_SCORE has been granted. */
-  extraShieldAwarded: boolean;
+  /** Next score milestone; milestones reached at full shields are not banked. */
+  nextShieldScore: number;
   /** Consecutive hits without a miss; drives the score multiplier. */
   combo: number;
   bestCombo: number;
@@ -202,7 +202,8 @@ const MYSTERY_MIN_DELAY = 16;
 const MYSTERY_DELAY_RANGE = 10;
 // Like the arcade, the bonus ship stops visiting once the wave is nearly cleared.
 const MYSTERY_MIN_ENEMIES = 4;
-/** Classic arcade rule: a single bonus shield (life) the first time the score reaches this. */
+export const MAX_SHIELDS = 3;
+/** Restore a lost shield (life) at each multiple of this score, up to MAX_SHIELDS. */
 export const EXTRA_SHIELD_SCORE = 1500;
 const ENEMY_SHOT_SPEED = 5.5;
 const BOMB_SPEEDS: Record<BombKind, number> = { malware: ENEMY_SHOT_SPEED, worm: 4.4, ransomware: 7 };
@@ -281,7 +282,7 @@ export function createGameState(seed = randomSeed()): GameState {
     enemyShots: [],
     score: 0,
     kills: 0,
-    lives: 3,
+    lives: MAX_SHIELDS,
     enemyDirection: 1,
     enemySpeed: 1.15,
     playerFireCooldown: 0,
@@ -295,7 +296,7 @@ export function createGameState(seed = randomSeed()): GameState {
     marchDistance: 0,
     mystery: null,
     mysteryTimer: MYSTERY_MIN_DELAY,
-    extraShieldAwarded: false,
+    nextShieldScore: EXTRA_SHIELD_SCORE,
     combo: 0,
     bestCombo: 0,
     shotsHit: 0,
@@ -878,10 +879,12 @@ export function updateGame(
     emit(state, { type: "formationIncoming", level: state.level });
   }
 
-  if (!state.extraShieldAwarded && state.score >= EXTRA_SHIELD_SCORE) {
-    state.extraShieldAwarded = true;
-    state.lives += 1;
-    emit(state, { type: "extraShield", lives: state.lives });
+  while (state.score >= state.nextShieldScore) {
+    state.nextShieldScore += EXTRA_SHIELD_SCORE;
+    if (state.lives < MAX_SHIELDS) {
+      state.lives += 1;
+      emit(state, { type: "extraShield", lives: state.lives });
+    }
   }
 
   if (state.enemyFireCooldown <= 0) {

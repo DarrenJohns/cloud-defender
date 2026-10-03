@@ -14,7 +14,7 @@ Game assets are included in `public/assets`; no separate model download is neede
 
 The `dev` branch deploys automatically to [https://darrenjohns.github.io/cloud-defender/](https://darrenjohns.github.io/cloud-defender/) through `.github/workflows/pages.yml`. The Pages build uses the repository subpath as its Vite base so models and images load correctly.
 
-Each wave uses a different trio of alien models, and waves get faster and descend as they progress. Classic rules apply: only one shot can be in flight at a time, only the lowest alien in each column can drop a bomb, and alien rows score 30/20/10 points. The mystery ship, extra shield at 1,500 points, special bombs, bomb-cancelling shots, hit streaks and wave-clear bonuses add variations to the classic gameplay.
+Each wave uses a different trio of alien models, and waves get faster and descend as they progress. Classic rules apply: only one shot can be in flight at a time, only the lowest alien in each column can drop a bomb, and alien rows score 30/20/10 points. The mystery ship, shield replacements, special bombs, bomb-cancelling shots, hit streaks and wave-clear bonuses add variations to the classic gameplay. Every 1,500 points restores one lost shield, up to three total. Milestones reached with all three shields intact are consumed, not banked.
 
 ## Controls
 
@@ -26,7 +26,10 @@ Each wave uses a different trio of alien models, and waves get faster and descen
 - **F** (hold): fast-forward the alien invaders at 4× speed
 - **R**: restart at any time
 - **T**: trigger the player death animation immediately; press again to try the next fall
+- **S**: test the shield-acquisition sequence; restore one missing shield, or preview at full shields without exceeding three (score and score milestones are unchanged)
 - **Enter**: restart after game over
+
+Shield awards briefly freeze combat for a large spinning 3D shield reveal, sweeping metallic shine, expanding energy rings and sparks. The announcer says "New shield acquired!" without duplicate on-screen text. The shield shrinks along a curved flight into its HUD slot. Gameplay resumes automatically after it lands; restarting cancels the sequence.
 
 ## Checks
 
