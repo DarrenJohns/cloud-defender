@@ -1,6 +1,29 @@
 import { ALL_VOICE_LINES, AnnouncerQueue, VOICE_MAX_WAIT_SECONDS } from "./announcer";
 import type { VoiceLine } from "./announcer";
 
+const PALETTE_FILES = {
+  cannon: "player-cannon.mp3",
+  destruction: "alien-destruction.mp3",
+  shieldLoss: "shield-loss.mp3",
+  shieldAward: "shield-acquired.mp3",
+} as const;
+type PaletteSound = keyof typeof PALETTE_FILES;
+type PaletteGroup = PaletteSound | "alienLaunch" | "firewallImpact";
+type PalettePlayback = {
+  group?: PaletteGroup;
+  rate?: number;
+  duration?: number;
+  lowpass?: number;
+};
+const PALETTE_LIMITS: Record<PaletteGroup, number> = {
+  cannon: 6,
+  destruction: 4,
+  shieldLoss: 2,
+  shieldAward: 1,
+  alienLaunch: 3,
+  firewallImpact: 3,
+};
+
 const MARCH_NOTES = [55, 49, 46.25, 41.2];
 const MASTER_VOLUME = 0.32;
 // Relative to the master; the announcer sits clearly above the effects.
@@ -10,11 +33,14 @@ const VOICE_DUCK_LEVEL = 0.5;
 
 type AudioContextConstructor = typeof AudioContext;
 
-/** Synthesised retro sound effects; every method is a silent no-op until audio is unlocked. */
+/** Rendered sci-fi palette and supporting synthesis, gated by unlock, mute and pause. */
 export class GameAudio {
   private context: AudioContext | null = null;
   private master: GainNode | null = null;
   private noiseBuffer: AudioBuffer | null = null;
+  private readonly paletteBuffers = new Map<PaletteSound, AudioBuffer>();
+  private readonly paletteLoads = new Map<PaletteSound, Promise<void>>();
+  private readonly paletteSources = new Map<PaletteGroup, { source: AudioBufferSourceNode; gain: GainNode }[]>();
   private muted: boolean;
   private paused = false;
   private marchStep = 0;
@@ -62,6 +88,9 @@ export class GameAudio {
       this.sfxBus.connect(this.master);
       this.voiceBus = this.createVoiceBus(this.context, this.master);
       this.noiseBuffer = this.createNoiseBuffer(this.context);
+      for (const sound of Object.keys(PALETTE_FILES) as PaletteSound[]) {
+        this.paletteLoads.set(sound, this.loadPaletteSound(this.context, sound));
+      }
       const context = this.context;
       context.addEventListener("statechange", () => {
         if (context.state !== "running" || this.awaitingUnlock.length === 0) return;
@@ -93,29 +122,45 @@ export class GameAudio {
     const frequency = MARCH_NOTES[this.marchStep % MARCH_NOTES.length]!;
     this.marchStep += 1;
     if (!this.throttle("march", 0.07)) return;
-    this.tone({ type: "square", from: frequency, to: frequency * 0.97, duration: 0.11, volume: 0.22, lowpass: 420 });
+    this.tone({ type: "square", from: frequency, to: frequency * 0.97, duration: 0.15, volume: 0.42, lowpass: 650 });
+    // Upper resonance keeps the pulse audible without relying on sub-bass playback.
+    this.tone({ type: "triangle", from: frequency * 3, to: frequency * 2.91, duration: 0.12, volume: 0.16, lowpass: 900 });
   }
 
   playerFire(): void {
     if (!this.throttle("fire", 0.05)) return;
-    this.tone({ type: "square", from: 1250, to: 420, duration: 0.09, volume: 0.07, lowpass: 3200 });
+    this.playPalette("cannon", 0.8);
   }
 
   alienFire(): void {
     if (!this.throttle("alienFire", 0.06)) return;
-    this.tone({ type: "triangle", from: 260, to: 120, duration: 0.14, volume: 0.12 });
+    this.playPalette("cannon", 0.75, { group: "alienLaunch", rate: 0.72, duration: 0.75, lowpass: 2400 });
   }
 
   alienDestroyed(count = 1): void {
     if (!this.throttle("alienDestroyed", 0.03)) return;
-    const volume = Math.min(0.32, 0.2 + (count - 1) * 0.06);
-    this.noise({ duration: 0.22, volume, filter: "bandpass", from: 2400, to: 300, q: 1.2 });
-    this.tone({ type: "square", from: 680, to: 90, duration: 0.18, volume: volume * 0.45, lowpass: 1800 });
+    this.playPalette("destruction", Math.min(1.2, 1 + (count - 1) * 0.06));
   }
 
   firewallHit(quiet = false): void {
     if (!this.throttle("firewall", 0.04)) return;
-    this.noise({ duration: 0.12, volume: quiet ? 0.08 : 0.14, filter: "bandpass", from: 900, to: 500, q: 2 });
+    this.playPalette("destruction", quiet ? 0.28 : 0.8, {
+      group: "firewallImpact", rate: 0.88, duration: 1.15, lowpass: 3400,
+    });
+  }
+
+  firewallDestroyed(quiet = false): void {
+    if (!this.throttle("firewallDestroyed", 0.12)) return;
+    const volume = quiet ? 0.16 : 0.36;
+    // A detonation is mostly turbulent noise, not an audible descending musical note.
+    this.noise({ duration: 0.12, volume: 0.16 * volume, filter: "lowpass", from: 2800, to: 700, q: 0.5, attack: 0.001, hold: 0.015 });
+    this.noise({ duration: 1.6, volume: 0.75 * volume, filter: "lowpass", from: 1800, to: 180, q: 0.7, attack: 0.003, hold: 0.18 });
+    this.noise({ duration: 2.6, volume: 1.1 * volume, filter: "lowpass", from: 320, to: 70, q: 1.2, attack: 0.008, hold: 0.35 });
+    // Sustained low and mid-bass body remains audible on speakers that cannot reproduce sub-bass.
+    this.tone({ type: "sine", from: 68, to: 42, duration: 1.3, volume: 0.65 * volume, lowpass: 160, hold: 0.12 });
+    this.tone({ type: "triangle", from: 112, to: 76, duration: 0.95, volume: 0.35 * volume, lowpass: 300, hold: 0.08 });
+    this.noise({ duration: 1.2, volume: 0.4 * volume, filter: "bandpass", from: 420, to: 130, q: 0.7, delay: 0.15, hold: 0.12 });
+    this.noise({ duration: 0.9, volume: 0.1 * volume, filter: "bandpass", from: 900, to: 350, q: 0.6, delay: 0.32, hold: 0.03 });
   }
 
   groundHit(quiet = false): void {
@@ -125,8 +170,7 @@ export class GameAudio {
   }
 
   playerHit(): void {
-    this.tone({ type: "sawtooth", from: 440, to: 55, duration: 0.6, volume: 0.16, lowpass: 1600 });
-    this.noise({ duration: 0.5, volume: 0.2, filter: "lowpass", from: 2600, to: 200, q: 0.8 });
+    this.playPalette("shieldLoss", 0.9);
   }
 
   gameOver(): void {
@@ -199,21 +243,12 @@ export class GameAudio {
   }
 
   extraShield(): void {
-    const notes = [392, 523.3, 659.3, 784, 1046.5];
-    notes.forEach((frequency, index) => {
-      this.tone({ type: "triangle", from: frequency, to: frequency, duration: 0.14, volume: 0.09, delay: index * 0.08, lowpass: 3200 });
-    });
-    this.tone({ type: "sine", from: 1046.5, to: 1046.5, duration: 0.6, volume: 0.06, delay: 0.4 });
+    this.playPalette("shieldAward", 0.9);
   }
 
   mysteryDestroyed(): void {
     this.stopMysteryHum();
-    const notes = [523.3, 659.3, 784, 1046.5, 784, 1046.5];
-    notes.forEach((frequency, index) => {
-      this.tone({ type: "square", from: frequency, to: frequency, duration: 0.08, volume: 0.06, delay: 0.05 + index * 0.06, lowpass: 2800 });
-    });
-    this.noise({ duration: 0.35, volume: 0.22, filter: "bandpass", from: 3000, to: 250, q: 1 });
-    this.tone({ type: "sawtooth", from: 900, to: 70, duration: 0.3, volume: 0.1, lowpass: 2000 });
+    this.playPalette("destruction", 1.15);
   }
 
   /** Speaks an announcer line, subject to priority, queueing and cooldown rules. */
@@ -328,6 +363,71 @@ export class GameAudio {
     return input;
   }
 
+  private playPalette(sound: PaletteSound, volume: number, playback: PalettePlayback = {}, waitForLoad = true): void {
+    const context = this.ready();
+    if (!context || !this.sfxBus) return;
+    const buffer = this.paletteBuffers.get(sound);
+    if (!buffer) {
+      const loading = this.paletteLoads.get(sound);
+      const requestedAt = context.currentTime;
+      if (loading && waitForLoad) void loading.then(() => {
+        if (context.currentTime - requestedAt < 0.25) this.playPalette(sound, volume, playback, false);
+      });
+      return;
+    }
+    const source = context.createBufferSource();
+    const gain = context.createGain();
+    const group = playback.group ?? sound;
+    const active = this.paletteSources.get(group) ?? [];
+    this.paletteSources.set(group, active);
+    if (active.length >= PALETTE_LIMITS[group]) {
+      const oldest = active.shift()!;
+      oldest.gain.gain.cancelScheduledValues(context.currentTime);
+      oldest.gain.gain.setValueAtTime(oldest.gain.gain.value, context.currentTime);
+      oldest.gain.gain.linearRampToValueAtTime(0, context.currentTime + 0.06);
+      oldest.source.stop(context.currentTime + 0.06);
+    }
+    const entry = { source, gain };
+    active.push(entry);
+    source.buffer = buffer;
+    source.playbackRate.value = playback.rate ?? 1;
+    gain.gain.value = volume;
+    let filter: BiquadFilterNode | undefined;
+    if (playback.lowpass) {
+      filter = context.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.frequency.value = playback.lowpass;
+      source.connect(filter).connect(gain);
+    } else {
+      source.connect(gain);
+    }
+    gain.connect(this.sfxBus);
+    source.onended = () => {
+      const index = active.indexOf(entry);
+      if (index !== -1) active.splice(index, 1);
+      source.disconnect();
+      filter?.disconnect();
+      gain.disconnect();
+    };
+    source.start();
+    if (playback.duration) {
+      const end = context.currentTime + playback.duration;
+      gain.gain.setValueAtTime(volume, end - 0.08);
+      gain.gain.linearRampToValueAtTime(0, end);
+      source.stop(end);
+    }
+  }
+
+  private async loadPaletteSound(context: AudioContext, sound: PaletteSound): Promise<void> {
+    try {
+      const response = await fetch(`${import.meta.env.BASE_URL}assets/sfx/${PALETTE_FILES[sound]}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      this.paletteBuffers.set(sound, await context.decodeAudioData(await response.arrayBuffer()));
+    } catch (error) {
+      console.error(`Could not load sound palette clip: ${sound}`, error);
+    }
+  }
+
   private async loadVoices(context: AudioContext): Promise<void> {
     this.voicesLoading = true;
     await Promise.all(
@@ -399,6 +499,7 @@ export class GameAudio {
     volume: number;
     delay?: number;
     lowpass?: number;
+    hold?: number;
   }): void {
     const context = this.ready();
     if (!context || !this.master) return;
@@ -411,6 +512,7 @@ export class GameAudio {
     const envelope = context.createGain();
     envelope.gain.setValueAtTime(0.0001, start);
     envelope.gain.exponentialRampToValueAtTime(options.volume, start + 0.008);
+    if (options.hold) envelope.gain.setValueAtTime(options.volume, start + 0.008 + options.hold);
     envelope.gain.exponentialRampToValueAtTime(0.0001, end);
     let output: AudioNode = oscillator;
     if (options.lowpass) {
@@ -432,10 +534,12 @@ export class GameAudio {
     to: number;
     q: number;
     attack?: number;
+    hold?: number;
+    delay?: number;
   }): void {
     const context = this.ready();
     if (!context || !this.master || !this.noiseBuffer) return;
-    const start = context.currentTime;
+    const start = context.currentTime + (options.delay ?? 0);
     const end = start + options.duration;
     const source = context.createBufferSource();
     source.buffer = this.noiseBuffer;
@@ -449,6 +553,7 @@ export class GameAudio {
     const attack = options.attack ?? 0.005;
     envelope.gain.setValueAtTime(0.0001, start);
     envelope.gain.exponentialRampToValueAtTime(options.volume, start + attack);
+    if (options.hold) envelope.gain.setValueAtTime(options.volume, start + attack + options.hold);
     envelope.gain.exponentialRampToValueAtTime(0.0001, end);
     source.connect(filter).connect(envelope).connect(this.sfxBus!);
     source.start(start, Math.random() * 0.5);

@@ -18,6 +18,7 @@ import {
   MYSTERY_EDGE,
   MYSTERY_Y,
   PLAYER_LIMIT,
+  PLAYER_MUZZLE_OFFSET,
   PLAYER_Y,
   rowPoints,
   shotAccuracy,
@@ -83,6 +84,31 @@ describe("game simulation", () => {
     state.shipX = PLAYER_LIMIT;
     updateGame(state, { ...idle, right: true }, 0.05);
     expect(state.shipX).toBe(PLAYER_LIMIT);
+  });
+
+  it("ends immediately when an alien reaches the A's line, regardless of shields or invulnerability", () => {
+    for (const lives of [1, 2, 3]) {
+      const state = createGameState();
+      state.formationIntro = 0;
+      state.lives = lives;
+      state.invulnerability = 1;
+      state.combo = 5;
+      state.score = 123;
+      state.enemies = [{ ...state.enemies[0]!, y: PLAYER_Y + PLAYER_MUZZLE_OFFSET }];
+      const invadingId = state.enemies[0]!.id;
+      updateGame(state, idle, 0.001);
+      expect(state.mode).toBe("gameover");
+      expect(state.lives).toBe(0);
+      expect(state.combo).toBe(0);
+      expect(state.enemies[0]!.id).toBe(invadingId);
+      expect(eventsOf(state, "playerHit")).toEqual([{ lives: 0 }]);
+      expect(eventsOf(state, "gameOver")).toHaveLength(1);
+      expect(eventsOf(state, "gameOver")[0]!.score).toBe(123);
+      expect(eventsOf(state, "formationIncoming")).toHaveLength(0);
+      state.events = [];
+      updateGame(state, idle, 0.001);
+      expect(eventsOf(state, "gameOver")).toHaveLength(0);
+    }
   });
 
   it("fires, scores a hit, and starts the next alien wave", () => {

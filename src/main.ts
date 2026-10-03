@@ -70,12 +70,24 @@ const FIXED_STEP_SECONDS = 1 / 240;
 // Longest frame we try to catch up on; anything slower runs in slow motion instead of jumping.
 const MAX_FRAME_SECONDS = 0.1;
 let stepAccumulator = 0;
-const WAVE_BANNER_SECONDS = 2.6;
+const WAVE_BANNER_SECONDS = 3;
 const WAVE_BANNER_EXIT_SECONDS = 0.4;
-// Game-time countdown for the "wave secured" banner, so it holds while paused.
+// Real-time breather between waves; manual pause and shield rewards hold the countdown.
 let waveBannerSeconds = 0;
+let pendingFormationLevel: number | null = null;
 const keys = new Set<string>();
 const input: GameInput = { left: false, right: false, fire: false };
+const CURSOR_IDLE_SECONDS = 2;
+let cursorIdleSeconds = 0;
+
+function showCursor(): void {
+  cursorIdleSeconds = 0;
+  document.body.classList.remove("cursor-idle");
+}
+
+window.addEventListener("pointermove", showCursor);
+window.addEventListener("pointerdown", showCursor);
+window.addEventListener("blur", showCursor);
 
 const MUTED_KEY = "cloud-defender.muted";
 
@@ -157,6 +169,7 @@ function handleGameEvents(events: readonly GameEvent[], aftermath: boolean): voi
         audio.announce("zero-day");
         break;
       case "firewallDestroyed":
+        audio.firewallDestroyed(aftermath);
         if (!aftermath) audio.announce("firewall-lost");
         break;
       case "mysteryDestroyed":
@@ -176,8 +189,12 @@ function handleGameEvents(events: readonly GameEvent[], aftermath: boolean): voi
         break;
       case "formationIncoming":
         audio.resetMarch();
-        audio.formationFlyIn();
-        audio.announce(waveLine(event.level));
+        if (!waveBanner.hidden) {
+          pendingFormationLevel = event.level;
+        } else {
+          audio.formationFlyIn();
+          audio.announce(waveLine(event.level));
+        }
         break;
       case "marchBeat":
         audio.marchNote();
@@ -198,6 +215,7 @@ function handleGameEvents(events: readonly GameEvent[], aftermath: boolean): voi
 
 function beginShieldAward(): void {
   renderShieldIcons(state.lives);
+  shieldBonusPending = false;
   const icons = livesElement.querySelectorAll<HTMLImageElement>("img:not(.is-lost)");
   const target = icons[icons.length - 1];
   if (!target) throw new Error("Missing HUD shield for acquisition sequence.");
@@ -227,13 +245,21 @@ function showWaveBanner(clear: WaveClear): void {
   waveBanner.classList.remove("is-leaving");
   waveBanner.hidden = false;
   waveBannerSeconds = WAVE_BANNER_SECONDS;
+  document.body.classList.add("wave-intermission");
+  keys.clear();
+  updateInput();
 }
 
 function updateWaveBanner(deltaSeconds: number): void {
   if (waveBanner.hidden) return;
   waveBannerSeconds -= deltaSeconds;
   if (waveBannerSeconds <= 0) {
+    const level = pendingFormationLevel;
     hideWaveBanner();
+    if (level !== null) {
+      audio.formationFlyIn();
+      audio.announce(waveLine(level));
+    }
   } else if (waveBannerSeconds <= WAVE_BANNER_EXIT_SECONDS) {
     waveBanner.classList.add("is-leaving");
   }
@@ -243,6 +269,8 @@ function hideWaveBanner(): void {
   waveBannerSeconds = 0;
   waveBanner.hidden = true;
   waveBanner.classList.remove("is-leaving");
+  document.body.classList.remove("wave-intermission");
+  pendingFormationLevel = null;
 }
 
 function updateInput(): void {
@@ -364,7 +392,8 @@ function updateHud(): void {
   comboMultiplierElement.textContent = `×${Math.max(2, multiplier)}`;
   showMode(state.mode);
   // Exposed for styling hooks and end-to-end tests.
-  document.body.dataset.game = splashVisible ? "splash" : paused ? "paused" : shieldAward.active ? "shield-award" : state.mode;
+  document.body.dataset.game = splashVisible ? "splash" : paused ? "paused" : shieldAward.active ? "shield-award" : !waveBanner.hidden ? "wave-intermission" : state.mode;
+  if (splashVisible || paused || !waveBanner.hidden || state.mode !== "playing") showCursor();
 }
 
 function onAssetsReady(): void {
@@ -435,6 +464,7 @@ document.addEventListener("visibilitychange", () => {
 
 function restart(withSplash = true): void {
   if (!assetsReady()) return;
+  shieldBonusPending = false;
   gameScene.resetForRestart();
   clearShieldAward();
   audio.stopVoice();
@@ -532,20 +562,28 @@ let lastTime = performance.now();
 function animate(now: number): void {
   const frameSeconds = Math.min(Math.max(0, now - lastTime) / 1000, MAX_FRAME_SECONDS);
   lastTime = now;
+  if (assetsReady() && !paused && !splashVisible && waveBanner.hidden && state.mode === "playing") {
+    cursorIdleSeconds += frameSeconds;
+    document.body.classList.toggle("cursor-idle", cursorIdleSeconds >= CURSOR_IDLE_SECONDS);
+  } else {
+    showCursor();
+  }
 
-  const simulating = assetsReady() && !paused && !splashVisible && !shieldAward.active;
+  const betweenWaves = !waveBanner.hidden;
+  if (betweenWaves && !paused && !splashVisible && !shieldAward.active) {
+    updateWaveBanner(frameSeconds);
+  }
+  const simulating = assetsReady() && !paused && !splashVisible && !shieldAward.active && !betweenWaves;
   if (simulating) {
     stepAccumulator += frameSeconds;
     const liveEvents: GameEvent[] = [];
     const aftermathEvents: GameEvent[] = [];
-    let playedSeconds = 0;
     while (stepAccumulator >= FIXED_STEP_SECONDS) {
       stepAccumulator -= FIXED_STEP_SECONDS;
       if (state.mode === "playing") {
         updateGame(state, input, FIXED_STEP_SECONDS);
         liveEvents.push(...state.events.splice(0));
-        playedSeconds += FIXED_STEP_SECONDS;
-        if (liveEvents.some((event) => event.type === "extraShield")) break;
+        if (liveEvents.some((event) => event.type === "extraShield" || event.type === "waveCleared")) break;
       } else {
         updateAftermath(state, FIXED_STEP_SECONDS);
         aftermathEvents.push(...state.events.splice(0));
@@ -553,7 +591,6 @@ function animate(now: number): void {
     }
     handleGameEvents(liveEvents, false);
     handleGameEvents(aftermathEvents, true);
-    updateWaveBanner(playedSeconds);
     updateHud();
   } else {
     stepAccumulator = 0;
@@ -564,7 +601,7 @@ function animate(now: number): void {
     livesElement.querySelectorAll("img:not(.is-lost)").forEach((icon) => replayClass(icon as HTMLElement, "is-new"));
     updateHud();
   }
-  const frozen = paused || shieldAward.active;
+  const frozen = paused || shieldAward.active || !waveBanner.hidden;
   if (!frozen) sceneSeconds += frameSeconds;
   gameScene.update(state, frozen ? 0 : frameSeconds, sceneSeconds);
   gameScene.render();

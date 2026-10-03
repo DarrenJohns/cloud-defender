@@ -2,11 +2,13 @@ import { AdditiveBlending, AmbientLight, Box3, BoxGeometry, BufferGeometry, Canv
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import type { BombCancel, GameEvent, GameState, GroundImpact, MysteryHit, Projectile, ShieldHit } from "./gameLogic";
 import { ALIEN_VARIANT_COUNT, FORMATION_INTRO_SECONDS, GROUND_Y, MYSTERY_EDGE, MYSTERY_Y, PLAYER_MUZZLE_OFFSET, PLAYER_Y, SHIELD_HEIGHT, SHIELD_WIDTH, SHIELD_Y, WORLD_WIDTH, WORM_AMPLITUDE, WORM_FREQUENCY } from "./gameLogic";
-import { ALIEN_MODEL_PATHS, BACKGROUND_DISTANCE, BOMB_DEPTH, CAMERA_DISTANCE, CAMERA_HEIGHT, DAMAGE_HOLE_CAPACITY, HALF_WIDTH, MIN_VIEW_HEIGHT, PARALLAX_EASE, PARALLAX_OVERSCAN, PARALLAX_X, PARALLAX_Y, PLAYER_GROUND_Y, PLAYER_SHADOW_Y, SHIELD_CHUNK_COLORS } from "./scene/constants";
+import { ALIEN_MODEL_PATHS, BACKGROUND_DISTANCE, BOMB_DEPTH, CAMERA_DISTANCE, CAMERA_HEIGHT, DAMAGE_HOLE_CAPACITY, MIN_VIEW_HEIGHT, PARALLAX_EASE, PARALLAX_OVERSCAN, PARALLAX_X, PARALLAX_Y, PLAYER_GROUND_Y, PLAYER_SHADOW_Y, SHIELD_CHUNK_COLORS } from "./scene/constants";
 import { createCloudHazeTexture, createDustTexture, createMuzzleFlareTexture, createScorePopupTexture, seededRandom } from "./scene/textures";
 import { STAR_COUNT, STAR_LOWEST_SCREEN_Y, STAR_MARGIN_HEIGHT, STAR_PLANE_Z, drawBackground, makeCloud, makeGradientMaterial, makeStarField } from "./scene/background";
+import { cloudLayout, createCloudWidths } from "./scene/cloudLayout";
+import { alienForegroundDepth } from "./scene/foregroundDepth";
 import { makeErodibleMaterial, makeHoleWalls, setDamageUniforms } from "./scene/shieldMaterial";
-import { ALIEN_DEPTH_MULTIPLIER, ROW_SHADOW_LIFT, SHIP_SHADOW_DEPTH, SHIP_SHADOW_WIDTH, drawShieldShadow, makeAlienShadow, makeShieldShadow, makeShipShadow, updateAlienShadow } from "./scene/shadows";
+import { ALIEN_DEPTH_MULTIPLIER, ROW_SHADOW_LIFT, ROW_SHADOW_Z, SHIP_SHADOW_DEPTH, SHIP_SHADOW_WIDTH, drawShieldShadow, makeAlienShadow, makeShieldShadow, makeShipShadow, updateAlienShadow } from "./scene/shadows";
 import type { ShieldShadow } from "./scene/shadows";
 import { MYSTERY_BEACON_COUNT, makeMysteryShip } from "./scene/mysteryShip";
 import { HudShieldBurst } from "./scene/hudShieldBurst";
@@ -14,12 +16,10 @@ import { formationFlightPose, makeEnemy } from "./scene/formation";
 import { BINARY_FLICKER_SECONDS, BINARY_GLYPH_HEIGHT, BINARY_GLYPH_SPACING, BOMB_CANCEL_COLORS, HEX_GLYPH_HEIGHT, HEX_GLYPH_WIDTH, MALWARE_CUBE_SIZE, WORM_SEGMENT_LAG, WORM_SEGMENT_SPACING, createBinaryGlyphTextures, createHexGlyphTextures, createMalwareFaceTextures, makeBinaryStream, makeMalwareBomb, makeRansomwareBomb, makeWormBomb } from "./scene/bombs";
 
 interface CloudMotion {
-  x: number;
-  y: number;
+  offsetX: number;
+  offsetY: number;
   z: number;
   scale: number;
-  driftSpeed: number;
-  halfWidth: number;
   phase: number;
 }
 
@@ -94,6 +94,8 @@ export class GameScene {
   readonly renderer: WebGLRenderer;
   readonly scene = new Scene();
   readonly camera = new PerspectiveCamera(45, 1, 0.1, 120);
+  private readonly cloudLayoutCamera = new PerspectiveCamera();
+  private readonly cloudWidths = createCloudWidths(Math.floor(Math.random() * 0x100000000));
   private readonly background: Mesh;
   private readonly backgroundTexture: CanvasTexture;
   private readonly stars: Points;
@@ -103,6 +105,9 @@ export class GameScene {
   private readonly cloudHazeTexture: CanvasTexture;
   private readonly hudShieldBurst: HudShieldBurst;
   private readonly alienModels: Group[] = [];
+  private readonly alienModelRadii: number[] = [];
+  private firewallFront = BOMB_DEPTH;
+  private readonly firewallBounds = new Box3();
   private readonly accentLight = new PointLight("#54bfff", 12, 18, 2);
   private readonly shadow: Mesh;
   private readonly shadowTexture: CanvasTexture;
@@ -140,6 +145,7 @@ export class GameScene {
   private readonly ransomwareRingGeometry = new TorusGeometry(0.3, 0.03, 8, 32);
   private readonly hitParticles: HitParticle[] = [];
   private readonly fragmentGeometry = new IcosahedronGeometry(1, 0);
+  private readonly firewallBrickGeometry = new BoxGeometry(1, 0.55, 0.5);
   private readonly floorDecalGeometry = new PlaneGeometry(1, 1);
   private readonly dustTexture: CanvasTexture;
   private readonly loader = new GLTFLoader();
@@ -193,7 +199,7 @@ export class GameScene {
     this.scene.add(new AmbientLight("#bedaff", 1.15));
 
     const keyLight = new DirectionalLight("#ffffff", 2.2);
-    keyLight.position.set(-4, 7, 8);
+    keyLight.position.set(-0.5, 24, 4);
     keyLight.castShadow = true;
     keyLight.shadow.mapSize.set(1024, 1024);
     keyLight.shadow.camera.left = -9;
@@ -284,6 +290,10 @@ export class GameScene {
     )
       .then((models) => {
         this.alienModels.push(...models);
+        for (const model of models) {
+          const size = new Box3().setFromObject(model).getSize(new Vector3());
+          this.alienModelRadii.push(size.length() / 2);
+        }
         onReady();
       })
       .catch((error: unknown) => {
@@ -393,27 +403,21 @@ export class GameScene {
           return;
         }
 
-        const cloudPlacements = [
-          { x: -5.4, y: 3.3, scale: 1.25 },
-          { x: 4.8, y: 5.2, scale: 0.95 },
-          { x: 0.5, y: 1.25, scale: 0.75 },
-        ];
-        for (const [index, placement] of cloudPlacements.entries()) {
+        const cloudPlacements = cloudLayout(0, this.cloudWidths);
+        for (const index of cloudPlacements.keys()) {
           const cloud = makeCloud(
             source,
-            placement.x,
-            placement.y,
-            placement.scale,
+            0,
+            0,
+            1,
             this.cloudHazeTexture,
           );
           this.clouds.push(cloud);
           this.cloudMotion.push({
-            x: placement.x,
-            y: placement.y,
+            offsetX: cloud.position.x,
+            offsetY: cloud.position.y,
             z: cloud.position.z,
             scale: cloud.scale.x,
-            driftSpeed: 0.08 + placement.scale * 0.08,
-            halfWidth: (2.35 * placement.scale) / 2,
             phase: index * 2.1,
           });
         }
@@ -448,6 +452,9 @@ export class GameScene {
         case "shieldHit":
           this.shieldHitShake.set(event.shieldId, 0.32);
           this.spawnShieldHitParticles(event);
+          break;
+        case "firewallDestroyed":
+          this.spawnFirewallExplosion(event.shieldId);
           break;
         case "groundImpact":
           this.spawnGroundSplat(event);
@@ -515,22 +522,30 @@ export class GameScene {
     this.updateHitParticles(delta);
     this.updateAlienDeaths(delta);
 
+    const cloudPlacements = cloudLayout(elapsedSeconds, this.cloudWidths);
+    const cloudRay = new Vector3();
+    const cloudCenter = new Vector3();
     for (let index = 0; index < this.clouds.length; index += 1) {
       const cloud = this.clouds[index]!;
       const motion = this.cloudMotion[index]!;
+      const placement = cloudPlacements[index]!;
+      const layoutCamera = this.cloudLayoutCamera;
+      cloudRay.set(placement.x, placement.y, 0.5).unproject(layoutCamera).sub(layoutCamera.position);
+      const distance = (-4.4 - layoutCamera.position.z) / cloudRay.z;
+      cloudCenter.copy(layoutCamera.position).addScaledVector(cloudRay, distance);
+      cloudRay.set(placement.x + placement.width, placement.y, 0.5).unproject(layoutCamera).sub(layoutCamera.position);
+      const edgeDistance = (-4.4 - layoutCamera.position.z) / cloudRay.z;
+      const width = layoutCamera.position.x + cloudRay.x * edgeDistance - cloudCenter.x;
+      const size = width / 2.35;
       const phase = elapsedSeconds * (0.55 + index * 0.08) + motion.phase;
-      motion.x -= motion.driftSpeed * delta;
-      if (motion.x < -HALF_WIDTH - motion.halfWidth) {
-        motion.x = HALF_WIDTH + motion.halfWidth;
-      }
-      cloud.position.x = motion.x;
-      cloud.position.y = motion.y + Math.sin(phase * 0.8) * 0.12;
-      cloud.position.z = motion.z + Math.sin(phase) * 0.22;
+      cloud.position.x = cloudCenter.x + motion.offsetX * size;
+      cloud.position.y = cloudCenter.y + motion.offsetY * size;
+      cloud.position.z = -4.4 + (motion.z + 4.4) * size + Math.sin(phase) * 0.22;
       cloud.rotation.x = Math.sin(phase * 0.7) * 0.12;
       cloud.rotation.y = Math.sin(phase) * 0.32;
       cloud.rotation.z = Math.sin(phase * 0.45) * 0.035;
       const breathe = 1 + Math.sin(phase * 0.65) * 0.018;
-      cloud.scale.setScalar(motion.scale * breathe);
+      cloud.scale.setScalar(motion.scale * size * breathe);
     }
 
     const shipDeltaX = state.shipX - this.previousShipX;
@@ -576,6 +591,7 @@ export class GameScene {
     this.shadow.scale.set(shadowScale, shadowScale, 1);
     this.updatePlayerDeath(delta);
 
+    this.firewallFront = BOMB_DEPTH;
     for (const shield of state.shields) {
       const uniforms = this.shieldDamageUniforms.get(shield.id);
       if (uniforms) setDamageUniforms(uniforms, shield.damageHoles, shield.destroyed);
@@ -606,6 +622,8 @@ export class GameScene {
           Math.cos(elapsedSeconds * 0.72 + phase) * 0.07 + shake * 0.04;
         view.rotation.z =
           Math.sin(elapsedSeconds * 0.65 + phase) * 0.018 + shake * 0.025;
+        this.firewallBounds.setFromObject(view);
+        this.firewallFront = Math.max(this.firewallFront, this.firewallBounds.max.z);
       }
     }
 
@@ -647,7 +665,10 @@ export class GameScene {
         view.position.set(
           x,
           y + Math.sin(elapsedSeconds * 2 + phase) * 0.045 + stepHop,
-          (flight?.z ?? 0) + Math.cos(elapsedSeconds * 1.4 + phase) * 0.055,
+          Math.max(
+            flight?.z ?? 0,
+            alienForegroundDepth(y, this.alienModelRadii[enemy.modelIndex]!, this.firewallFront),
+          ) + Math.cos(elapsedSeconds * 1.4 + phase) * 0.055,
         );
         view.rotation.x = Math.sin(elapsedSeconds * 1.4 + phase) * 0.045 + (flight?.pitch ?? 0);
         view.rotation.y = Math.cos(elapsedSeconds * 1.1 + phase) * 0.075 + (flight?.yaw ?? 0);
@@ -729,6 +750,7 @@ export class GameScene {
     for (const geometry of this.mysteryView.geometries) geometry.dispose();
     for (const material of this.mysteryView.materials) material.dispose();
     this.fragmentGeometry.dispose();
+    this.firewallBrickGeometry.dispose();
     this.floorDecalGeometry.dispose();
     this.binaryGlyphGeometry.dispose();
     for (const texture of this.binaryGlyphTextures) texture.dispose();
@@ -1068,6 +1090,7 @@ export class GameScene {
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld(true);
     this.applyCameraOffset(0, 0);
+    this.cloudLayoutCamera.copy(this.camera);
     const backgroundHeight = 2 * BACKGROUND_DISTANCE * Math.tan(this.camera.fov * Math.PI / 360);
     this.background.scale.set(backgroundHeight * aspect, backgroundHeight, 1);
     const context = this.backgroundTexture.image.getContext("2d");
@@ -1199,7 +1222,7 @@ export class GameScene {
         this.enemyShotViews.set(projectile.id, view);
         this.scene.add(view);
       }
-      view.position.set(projectile.x, projectile.y, BOMB_DEPTH);
+      view.position.set(projectile.x, projectile.y, this.firewallFront + 0.5);
       if (kind === "worm") {
         this.updateWormBomb(view, projectile);
         continue;
@@ -1267,7 +1290,7 @@ export class GameScene {
   private spawnBombCancel(cancel: BombCancel): void {
     const random = seededRandom(cancel.seed);
     const palette = BOMB_CANCEL_COLORS[cancel.kind];
-    const center = new Vector3(cancel.x, cancel.y, BOMB_DEPTH + 0.1);
+    const center = new Vector3(cancel.x, cancel.y, this.firewallFront + 0.6);
     const sparkCount = cancel.destroyed ? 10 + Math.floor(random() * 5) : 5;
     for (let index = 0; index < sparkCount; index += 1) {
       const color = palette.spark[Math.floor(random() * palette.spark.length)]!;
@@ -1309,9 +1332,64 @@ export class GameScene {
     );
   }
 
+  private spawnFirewallExplosion(shieldId: number): void {
+    const view = this.shieldViews.get(shieldId);
+    if (!view) throw new Error(`Missing firewall view: ${shieldId}`);
+    const center = view.position.clone();
+    center.z += 0.35;
+    const random = seededRandom(shieldId ^ 0xf17eba11);
+    this.flashImpactLight(center.clone().add(new Vector3(0, 0.2, 0.8)), "#dba879", 20, 0.6, 7);
+
+    for (let index = 0; index < 34; index += 1) {
+      const size = 0.14 + random() * 0.2;
+      const brick = new Mesh(this.firewallBrickGeometry, new MeshStandardMaterial({
+        color: SHIELD_CHUNK_COLORS[index % SHIELD_CHUNK_COLORS.length]!,
+        roughness: 0.75, transparent: true, depthWrite: false,
+      }));
+      brick.position.copy(center).add(new Vector3(
+        (random() - 0.5) * SHIELD_WIDTH, (random() - 0.5) * SHIELD_HEIGHT, random() * 0.25,
+      ));
+      brick.scale.setScalar(size);
+      brick.castShadow = true;
+      this.scene.add(brick);
+      this.hitParticles.push({
+        object: brick,
+        velocity: new Vector3((brick.position.x - center.x) * 3 + (random() - 0.5), 2 + random() * 3.5, (random() - 0.3) * 3),
+        angularVelocity: new Vector3(random() * 12, random() * 16, random() * 10),
+        age: 0, lifetime: 1.5 + random() * 0.9, gravity: 7, initialScale: size, kind: "fragment", bounce: true,
+      });
+    }
+    for (let index = 0; index < 18; index += 1) {
+      const size = 0.45 + random() * 0.4;
+      const smoke = new Sprite(new SpriteMaterial({
+        map: this.cloudHazeTexture, color: SMOKE_COLORS[index % SMOKE_COLORS.length]!,
+        transparent: true, opacity: 0, depthWrite: false, rotation: random() * Math.PI * 2,
+      }));
+      smoke.position.copy(center).add(new Vector3((random() - 0.5) * SHIELD_WIDTH, (random() - 0.5) * 0.6, 0.2));
+      smoke.scale.set(size, size, 1);
+      this.scene.add(smoke);
+      this.hitParticles.push({
+        object: smoke, velocity: new Vector3((random() - 0.5) * 1.3, 0.5 + random() * 0.9, 0.1),
+        angularVelocity: new Vector3(0, 0, (random() - 0.5) * 0.5),
+        age: 0, lifetime: 2 + random() * 1.5, gravity: -0.1, initialScale: size, kind: "smoke",
+      });
+    }
+    const flash = new Sprite(new SpriteMaterial({
+      map: this.muzzleFlareTexture, color: "#d4aa83", transparent: true,
+      blending: AdditiveBlending, depthWrite: false,
+    }));
+    flash.position.copy(center);
+    flash.scale.setScalar(2.8);
+    this.scene.add(flash);
+    this.hitParticles.push({
+      object: flash, velocity: new Vector3(), angularVelocity: new Vector3(),
+      age: 0, lifetime: 0.35, gravity: 0, initialScale: 2.8, kind: "dust",
+    });
+  }
+
   private spawnShieldHitParticles(hit: ShieldHit): void {
     const random = seededRandom(hit.seed);
-    const center = new Vector3(hit.x, hit.y, 0.2);
+    const center = new Vector3(hit.x, hit.y, this.firewallFront + 0.15);
     const fragmentCount = 4 + Math.floor(random() * 3);
 
     for (let index = 0; index < fragmentCount; index += 1) {
@@ -1562,7 +1640,7 @@ export class GameScene {
       drawShieldShadow(shadow, shield);
     }
     shadow.mesh.visible = !shield.destroyed;
-    shadow.mesh.position.set(shield.x, PLAYER_SHADOW_Y + ROW_SHADOW_LIFT, -0.25);
+    shadow.mesh.position.set(shield.x, PLAYER_SHADOW_Y + ROW_SHADOW_LIFT, ROW_SHADOW_Z);
   }
 
   private removeEnemyShadow(id: number): void {

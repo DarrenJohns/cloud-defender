@@ -37,9 +37,9 @@ export function drawBackground(
   context.putImageData(image, 0, 0);
 }
 
-export const STAR_COUNT = 220;
+export const STAR_COUNT = 720;
 // Extra stars that live only in the off-screen margin revealed by mouse parallax.
-export const STAR_MARGIN_COUNT = 340;
+export const STAR_MARGIN_COUNT = 940;
 // Margin stars reach this far above the normal top-of-screen (1 = top edge).
 export const STAR_MARGIN_HEIGHT = 1.5;
 export const STAR_PLANE_Z = -9.4;
@@ -55,8 +55,8 @@ export function makeStarField(): { points: Points; material: ShaderMaterial } {
     "aSize",
     new Float32BufferAttribute(
       Array.from({ length: count }, () => {
-        const sparkle = random() < 0.12;
-        return sparkle ? 0.07 + random() * 0.04 : 0.022 + random() * 0.035;
+        const bright = random() < 0.3;
+        return bright ? 0.045 + random() * 0.015 : 0.018 + random() * 0.025;
       }),
       1,
     ),
@@ -84,32 +84,25 @@ export function makeStarField(): { points: Points; material: ShaderMaterial } {
       uniform float uTime;
       uniform float uPixelScale;
       varying float vTwinkle;
-      varying float vSparkle;
       void main() {
         float speed = 0.7 + fract(aPhase * 0.37) * 1.5;
-        vTwinkle = (0.25 + 0.75 * (0.5 + 0.5 * sin(uTime * speed + aPhase))) * aBrightness;
-        vSparkle = smoothstep(0.06, 0.08, aSize);
+        float pulse = 0.5 + 0.5 * sin(uTime * speed + aPhase);
+        float brightStar = smoothstep(0.043, 0.05, aSize);
+        float glint = pow(pulse, 5.0);
+        vTwinkle = (0.35 + 0.65 * pulse + 0.3 * glint * brightStar) * aBrightness;
         vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
         gl_Position = projectionMatrix * viewPosition;
-        gl_PointSize = aSize * uPixelScale * (0.75 + vTwinkle * 0.5);
+        gl_PointSize = max(1.0, aSize * uPixelScale);
       }
     `,
     fragmentShader: `
       varying float vTwinkle;
-      varying float vSparkle;
       void main() {
         vec2 offset = gl_PointCoord - vec2(0.5);
         float distanceFromCenter = length(offset);
         float core = 1.0 - smoothstep(0.08, 0.32, distanceFromCenter);
         float glow = 1.0 - smoothstep(0.12, 0.5, distanceFromCenter);
-        float rays = max(
-          1.0 - smoothstep(0.0, 0.035, abs(offset.x)),
-          1.0 - smoothstep(0.0, 0.035, abs(offset.y))
-        ) * (1.0 - smoothstep(0.1, 0.5, distanceFromCenter));
-        float sparkleCore = 1.0 - smoothstep(0.02, 0.12, distanceFromCenter);
-        float plain = core * 0.75 + glow * 0.25;
-        float sparkle = sparkleCore + rays * 0.9 + glow * 0.12;
-        float alpha = mix(plain, sparkle, vSparkle) * vTwinkle;
+        float alpha = (core * 0.85 + glow * 0.15) * vTwinkle;
         gl_FragColor = vec4(vec3(0.67, 0.84, 1.0), alpha);
       }
     `,

@@ -113,7 +113,7 @@ export type GameEvent =
   | ({ type: "bombCancelled" } & BombCancel)
   | { type: "comboUp"; multiplier: number }
   | ({ type: "waveCleared" } & WaveClear)
-  /** A formation starts flying in: a new game, a new wave, or a reset after an invasion. */
+  /** A formation starts flying in: a new game or a new wave. */
   | { type: "formationIncoming"; level: number }
   | { type: "marchBeat"; beat: number }
   | { type: "gameOver"; score: number; seed: number };
@@ -433,17 +433,6 @@ export function erodeShieldsUnderEnemies(state: GameState): void {
   }
 }
 
-function resetEnemyFormation(state: GameState): void {
-  state.enemies = createEnemies(state.level);
-  state.enemyDirection = 1;
-  state.playerShots = [];
-  state.enemyShots = [];
-  state.formationIntro = FORMATION_INTRO_SECONDS;
-  state.marchDistance = 0;
-  state.mystery = null;
-  emit(state, { type: "formationIncoming", level: state.level });
-}
-
 function nextMysteryDelay(random: () => number): number {
   return MYSTERY_MIN_DELAY + random() * MYSTERY_DELAY_RANGE;
 }
@@ -484,8 +473,8 @@ function hitsMystery(ship: MysteryShip, shot: Projectile, startY: number): boole
   );
 }
 
-function loseLife(state: GameState): void {
-  state.lives = Math.max(0, state.lives - 1);
+function loseLife(state: GameState, damage = 1): void {
+  state.lives = Math.max(0, state.lives - damage);
   state.combo = 0;
   emit(state, { type: "playerHit", lives: state.lives });
   if (state.lives === 0) {
@@ -847,8 +836,7 @@ export function updateGame(
   if (state.mode !== "playing") return;
 
   if (state.enemies.some((enemy) => enemy.y <= ENEMY_BOTTOM)) {
-    loseLife(state);
-    if (state.mode === "playing") resetEnemyFormation(state);
+    loseLife(state, state.lives);
     return;
   }
 

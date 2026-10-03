@@ -20,6 +20,58 @@ async function startGame(page: Page, seed = 1): Promise<void> {
 }
 
 test.describe("Cloud Defender", () => {
+  test("plays palette sounds when aliens launch bombs and hit a firewall", async ({ page }) => {
+    const errors = trackErrors(page);
+    await page.addInitScript(() => {
+      const start = AudioBufferSourceNode.prototype.start;
+      AudioBufferSourceNode.prototype.start = function (...args: Parameters<typeof start>) {
+        start.apply(this, args);
+        if (this.playbackRate.value === Math.fround(0.72)) {
+          document.documentElement.dataset.alienLaunchSound = "played";
+        }
+        if (this.playbackRate.value === Math.fround(0.88)) {
+          document.documentElement.dataset.firewallImpactSound = "played";
+        }
+      };
+    });
+    await startGame(page);
+    await expect(page.locator("html")).toHaveAttribute("data-alien-launch-sound", "played", { timeout: 45_000 });
+    await expect(page.locator("html")).toHaveAttribute("data-firewall-impact-sound", "played", { timeout: 45_000 });
+    expect(errors).toEqual([]);
+  });
+
+  test("decodes the four approved stereo gameplay clips", async ({ page }) => {
+    await page.goto("/");
+    const clips = await page.evaluate(async () => {
+      const context = new AudioContext();
+      try {
+        return await Promise.all(
+          ["player-cannon", "alien-destruction", "shield-loss", "shield-acquired"].map(async (name) => {
+            const response = await fetch(`assets/sfx/${name}.mp3`);
+            if (!response.ok) throw new Error(`${name}: HTTP ${response.status}`);
+            const buffer = await context.decodeAudioData(await response.arrayBuffer());
+            let peak = 0;
+            for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+              for (const sample of buffer.getChannelData(channel)) {
+                if (!Number.isFinite(sample)) throw new Error(`${name}: non-finite sample`);
+                peak = Math.max(peak, Math.abs(sample));
+              }
+            }
+            return { name, channels: buffer.numberOfChannels, duration: buffer.duration, peak };
+          }),
+        );
+      } finally {
+        await context.close();
+      }
+    });
+    for (const [index, duration] of [1.8, 4.2, 2.3, 2.8].entries()) {
+      expect(clips[index]!.channels).toBe(2);
+      expect(clips[index]!.duration).toBeCloseTo(duration, 1);
+      expect(clips[index]!.peak).toBeGreaterThan(0.5);
+      expect(clips[index]!.peak).toBeLessThan(1);
+    }
+  });
+
   test("loads the title screen and starts a game", async ({ page }) => {
     const errors = trackErrors(page);
     await startGame(page);
@@ -46,6 +98,17 @@ test.describe("Cloud Defender", () => {
   test("showcases a shield, freezes combat and flies it into the HUD without exceeding three", async ({ page }) => {
     const errors = trackErrors(page);
     await startGame(page);
+    await page.evaluate(() => {
+      const award = document.getElementById("shield-award")!;
+      award.dataset.starts = "0";
+      new MutationObserver((records) => {
+        for (const record of records) {
+          if (record.attributeName === "hidden" && record.oldValue !== null && !award.hidden) {
+            award.dataset.starts = String(Number(award.dataset.starts) + 1);
+          }
+        }
+      }).observe(award, { attributes: true, attributeFilter: ["hidden"], attributeOldValue: true });
+    });
     await page.keyboard.press("KeyS");
     await expect(page.locator("body")).toHaveAttribute("data-game", "shield-award");
     await expect(page.locator("#shield-award")).toBeVisible();
@@ -66,6 +129,20 @@ test.describe("Cloud Defender", () => {
     await page.keyboard.down("Space");
     await expect.poll(async () => Number(await page.locator("#score").textContent()), { timeout: 45_000 }).toBeGreaterThan(0);
     await page.keyboard.up("Space");
+    await page.waitForTimeout(4_000);
+    await expect(page.locator("#shield-award")).toHaveAttribute("data-starts", "1");
+    await expect(page.locator("#shield-award")).toBeHidden();
+    await page.keyboard.down("KeyS");
+    await expect(page.locator("#shield-award")).toBeVisible();
+    await expect(page.locator("#shield-award")).toBeHidden({ timeout: 8_000 });
+    await page.evaluate(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyS", repeat: true }));
+    });
+    await page.waitForTimeout(500);
+    await expect(page.locator("#shield-award")).toBeHidden();
+    await expect(page.locator("#shield-award")).toHaveAttribute("data-starts", "2");
+    await expect(page.locator("#lives")).toHaveAttribute("data-lives", "3");
+    await page.keyboard.up("KeyS");
     expect(errors).toEqual([]);
   });
 
@@ -78,6 +155,9 @@ test.describe("Cloud Defender", () => {
     await expect(page.locator("body")).toHaveAttribute("data-game", "splash");
     await expect(page.locator("#lives img.is-arriving")).toHaveCount(0);
     await expect(page.locator("#lives img")).toHaveCount(3);
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("KeyS");
+    await expect(page.locator("#shield-award")).toBeVisible();
   });
 
   test("pauses and resumes from the keyboard and the panel", async ({ page }) => {
@@ -90,6 +170,22 @@ test.describe("Cloud Defender", () => {
     await page.locator("#resume-button").click();
     await expect(page.locator("body")).toHaveAttribute("data-game", "playing");
     await expect(page.locator("#pause-panel")).toBeHidden();
+  });
+
+  test("hides the idle cursor during gameplay and restores it for movement and menus", async ({ page }) => {
+    await startGame(page);
+    await page.mouse.move(100, 100);
+    await expect(page.locator("body")).toHaveClass(/cursor-idle/, { timeout: 8_000 });
+    await expect(page.locator("#game canvas")).toHaveCSS("cursor", "none");
+    await page.mouse.move(150, 100);
+    await expect(page.locator("body")).not.toHaveClass(/cursor-idle/);
+    await expect(page.locator("body")).toHaveClass(/cursor-idle/, { timeout: 8_000 });
+    await page.keyboard.press("KeyP");
+    await expect(page.locator("body")).not.toHaveClass(/cursor-idle/);
+    await page.waitForTimeout(2_200);
+    await expect(page.locator("body")).not.toHaveClass(/cursor-idle/);
+    await page.keyboard.press("KeyR");
+    await expect(page.locator("body")).not.toHaveClass(/cursor-idle/);
   });
 
   test("pauses automatically when the tab is hidden", async ({ page }) => {

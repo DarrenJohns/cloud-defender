@@ -1,0 +1,29 @@
+Approved S1-S5 sound palette
+
+Rendered by scripts/generate-cinematic-sounds.py.
+player-cannon.mp3: S1 / scifi-resonant-blaster.mp3
+alien-destruction.mp3: S2 / scifi-reactor-rupture.mp3
+shield-loss.mp3: S3 / scifi-shield-collapse.mp3
+shield-acquired.mp3: S4 / scifi-shield-restoration.mp3
+S5 / scifi-action-sequence.mp3 remains the audition reference mix, not a
+single gameplay effect. No film or game recordings are used.
+
+Sources, all Creative Commons Zero (CC0):
+
+qubodup - Synthesized explosion
+https://opengameart.org/content/synthesized-explosion
+Original: synthetic_explosion_1.flac
+
+Kenney - Sci-fi Sounds
+https://kenney.nl/assets/sci-fi-sounds
+Earlier auditions use Audio/explosionCrunch_003.ogg; it is not in S1-S4.
+
+Kenney - Impact Sounds
+https://kenney.nl/assets/impact-sounds
+Original: Audio/impactMetal_heavy_000.ogg (S1)
+
+S3 and S4 are original procedural designs; S2 combines original energy
+layers with qubodup's CC0 explosion.
+
+CC0: https://creativecommons.org/publicdomain/zero/1.0/
+Attribution is not mandatory; source provenance is retained here.

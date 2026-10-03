@@ -8,14 +8,15 @@ export const SHIP_SHADOW_DEPTH = 0.38;
 export const ALIEN_SHADOW_WIDTH = 1.3;
 // Extrudes the alien GLBs along Z at load time so they read as chunkier 3D objects.
 export const ALIEN_DEPTH_MULTIPLIER = 4;
-export const ALIEN_SHADOW_DEPTH = 0.34;
+export const ALIEN_SHADOW_DEPTH = 0.5;
 // Alien shadows start appearing once an alien is this far above the floor.
 export const ALIEN_SHADOW_FADE_HEIGHT = 8;
-export const ALIEN_SHADOW_MAX_OPACITY = 0.85;
 export const SHIELD_SHADOW_MAX_OPACITY = 0.15;
+export const ALIEN_SHADOW_MAX_OPACITY = SHIELD_SHADOW_MAX_OPACITY;
 // Raised slightly above the A's shadow line so the firewalls read as standing just behind the A.
 // Aliens and firewalls share a depth row behind the A, so their shadows share one line.
 export const ROW_SHADOW_LIFT = 0.28;
+export const ROW_SHADOW_Z = -0.25;
 export const SHIELD_SHADOW_COLUMNS = 40;
 export const SHIELD_SHADOW_ROWS = 10;
 export const SHIELD_SHADOW_PADDING = 0.3;
@@ -126,6 +127,7 @@ export function updateAlienShadow(shadow: Mesh, x: number, alienY: number): void
   (shadow.material as MeshBasicMaterial).opacity = eased * ALIEN_SHADOW_MAX_OPACITY;
   const scale = 0.7 + closeness * 0.45;
   shadow.scale.set(scale, scale, 1);
-  shadow.position.set(x, PLAYER_SHADOW_Y + ROW_SHADOW_LIFT, -0.25);
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.set(x, PLAYER_SHADOW_Y + ROW_SHADOW_LIFT, ROW_SHADOW_Z);
   shadow.visible = closeness > 0;
 }
