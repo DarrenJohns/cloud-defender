@@ -90,8 +90,8 @@ body.cursor-idle * {
 }
 
 .hud-shield-icons img {
-  width: 20px;
-  height: 20px;
+  width: 40px;
+  height: 40px;
   filter: drop-shadow(0 1px 3px #000a);
 }
 
@@ -935,8 +935,8 @@ button:focus-visible {
   }
 
   .hud-shield-icons img {
-    width: 16px;
-    height: 16px;
+    width: 32px;
+    height: 32px;
   }
 
 }

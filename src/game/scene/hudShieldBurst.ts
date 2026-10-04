@@ -1,4 +1,5 @@
-import { Box3, BufferAttribute, BufferGeometry, Mesh, MeshBasicMaterial, OrthographicCamera, Scene, Sprite, SpriteMaterial, Vector3 } from "three";
+import { AmbientLight, Box3, BufferAttribute, BufferGeometry, DirectionalLight, Mesh, MeshStandardMaterial, OrthographicCamera, Scene, Sprite, SpriteMaterial, Vector3 } from "three";
+import { ConvexGeometry } from "three/addons/geometries/ConvexGeometry.js";
 import type { Texture, WebGLRenderer } from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { seededRandom } from "./textures";
@@ -17,7 +18,7 @@ interface Shard {
 }
 
 interface BurstParticle {
-  object: Mesh<BufferGeometry, MeshBasicMaterial> | Sprite;
+  object: Mesh<BufferGeometry, MeshStandardMaterial> | Sprite;
   velocity: Vector3;
   spin: Vector3;
   age: number;
@@ -33,12 +34,15 @@ export class HudShieldBurst {
   private readonly camera = new OrthographicCamera(0, 1, 0, -1, -2000, 2000);
   private readonly particles: BurstParticle[] = [];
   private shards: Shard[] = [];
-  private shardTexture: Texture | null = null;
   private modelHeight = 1;
   private seed = 0x5eed;
   private lastTime = performance.now();
 
   constructor(url: string, private readonly smokeTexture: Texture) {
+    this.scene.add(new AmbientLight("#b9e4ff", 1.5));
+    const light = new DirectionalLight("#ffffff", 3);
+    light.position.set(-200, 300, 500);
+    this.scene.add(light);
     new GLTFLoader().load(url, (gltf) => {
       let source: Mesh | undefined;
       gltf.scene.traverse((object) => {
@@ -51,7 +55,6 @@ export class HudShieldBurst {
       const box = geometry.boundingBox ?? new Box3();
       this.modelHeight = Math.max(1e-3, box.max.y - box.min.y);
       geometry.translate(...box.getCenter(new Vector3()).negate().toArray());
-      this.shardTexture = (source.material as MeshBasicMaterial).map ?? null;
       this.shards = splitIntoShards(geometry, SHARD_COUNT);
       geometry.dispose();
     });
@@ -70,18 +73,20 @@ export class HudShieldBurst {
     const random = seededRandom(this.seed);
 
     for (const shard of this.shards) {
-      const material = new MeshBasicMaterial({ map: this.shardTexture, transparent: true });
+      const material = new MeshStandardMaterial({
+        color: "#36a9eb", roughness: 0.45, metalness: 0.25, transparent: true,
+      });
       const mesh = new Mesh(shard.geometry, material);
       mesh.scale.setScalar(scale);
-      mesh.position.set(centerX + shard.offset.x * scale, -(centerY - shard.offset.y * scale), 0);
+      mesh.position.set(centerX + shard.offset.x * scale, -(centerY - shard.offset.y * scale), shard.offset.z * scale);
       const direction = new Vector3(shard.offset.x, shard.offset.y, 0);
       if (direction.lengthSq() < 1e-6) direction.set(random() - 0.5, 1, 0);
       direction.normalize();
-      const speed = 35 + random() * 40;
+      const speed = rect.height * (1.2 + random() * 1.4);
       this.scene.add(mesh);
       this.particles.push({
         object: mesh,
-        velocity: new Vector3(direction.x * speed, direction.y * speed + 45 + random() * 30, 0),
+        velocity: new Vector3(direction.x * speed, direction.y * speed + 45 + random() * 30, (random() - 0.5) * rect.height * 3),
         spin: new Vector3((random() - 0.5) * 14, (random() - 0.5) * 14, (random() - 0.5) * 10),
         age: 0,
         lifetime: SHARD_LIFETIME * (0.8 + random() * 0.4),
@@ -148,7 +153,7 @@ export class HudShieldBurst {
         object.rotation.x += particle.spin.x * delta;
         object.rotation.y += particle.spin.y * delta;
         object.rotation.z += particle.spin.z * delta;
-        const mesh = object as Mesh<BufferGeometry, MeshBasicMaterial>;
+        const mesh = object as Mesh<BufferGeometry, MeshStandardMaterial>;
         mesh.material.opacity = life < 0.6 ? 1 : 1 - (life - 0.6) / 0.4;
         mesh.scale.setScalar(particle.baseScale * (1 - 0.35 * life));
       }
@@ -173,7 +178,6 @@ export class HudShieldBurst {
   dispose(): void {
     this.clear();
     for (const shard of this.shards) shard.geometry.dispose();
-    this.shardTexture?.dispose();
   }
 
   private removeParticle(index: number): void {
@@ -185,7 +189,7 @@ export class HudShieldBurst {
 }
 
 // Groups triangles around random seed points (a coarse Voronoi split) so each shard is an irregular chunk.
-function splitIntoShards(geometry: BufferGeometry, count: number): Shard[] {
+export function splitIntoShards(geometry: BufferGeometry, count: number): Shard[] {
   const position = geometry.getAttribute("position");
   const box = geometry.boundingBox ?? new Box3().setFromBufferAttribute(position as BufferAttribute);
   const random = seededRandom(0x51e1d);
@@ -234,6 +238,12 @@ function splitIntoShards(geometry: BufferGeometry, count: number): Shard[] {
     shard.computeBoundingBox();
     const offset = shard.boundingBox!.getCenter(new Vector3());
     shard.translate(-offset.x, -offset.y, -offset.z);
-    return { geometry: shard, offset };
+    // Close fracture surfaces so tumbling fragments never reveal hollow triangle shells.
+    const vertices = shard.getAttribute("position");
+    const points = Array.from({ length: vertices.count }, (_, index) =>
+      new Vector3().fromBufferAttribute(vertices, index));
+    const solid = new ConvexGeometry(points);
+    shard.dispose();
+    return { geometry: solid, offset };
   });
 }
