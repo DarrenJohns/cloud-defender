@@ -33,7 +33,7 @@ The mouse cursor hides after two seconds of inactivity during gameplay. Moving o
 
 Shield awards briefly freeze combat for a large spinning 3D shield reveal, sweeping metallic shine, expanding energy rings and sparks. The announcer says "New shield acquired!" without duplicate on-screen text. The shield shrinks along a curved flight into its HUD slot. Gameplay resumes automatically after it lands; restarting cancels the sequence.
 
-HUD shields are 40px tall (32px on compact screens). Losing a shield shatters it into closed, lit 3D chunks with tumbling rotation, depth motion and smoke, aligned to the icon's displayed size.
+HUD shields are 30px tall (24px on compact screens). Losing a shield shatters it into closed, lit 3D chunks with tumbling rotation, depth motion and smoke, aligned to the icon's displayed size.
 
 ## Checks
 
